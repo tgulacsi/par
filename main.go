@@ -157,12 +157,14 @@ func (rw *rsWriter) writeShards() error {
 	if err := rw.enc.Encode(rw.slices); err != nil {
 		return err
 	}
-	for _, b := range rw.slices {
+	for i, b := range rw.slices {
 		n := len(b)
-		if n > rw.i {
-			n = rw.i
+		if i < int(rw.meta.DataShards) {
+			if n > rw.i {
+				n = rw.i
+			}
+			rw.i -= n
 		}
-		rw.i -= n
 
 		hsh := crc32.New(crc32cTable)
 		hsh.Write(b[:n])

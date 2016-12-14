@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/klauspost/reedsolomon"
 	"github.com/pkg/errors"
@@ -15,8 +16,10 @@ import (
 const (
 	CRC32S = version(iota)
 
-	Version   = CRC32S
-	ShardSize = 4 << 10
+	Version             = CRC32S
+	DefaultShardSize    = 512 << 10
+	DefaultDataShards   = 10
+	DefaultParityShards = 3
 )
 
 type version uint8
@@ -32,6 +35,8 @@ type FileMetadata struct {
 	DataShards   uint8   `json:"DS"`
 	ParityShards uint8   `json:"PS"`
 	ShardSize    uint32  `json:"S"`
+	FileName     string  `json:"F"`
+	OnlyParity   bool    `json:"OP"`
 }
 type ShardMetadata struct {
 	Index  uint32 `json:"i"`
@@ -40,18 +45,19 @@ type ShardMetadata struct {
 }
 
 func main() {
-	flagDataShards := flag.Int("d", 10, "data shards")
-	flagParityShards := flag.Int("p", 3, "parity shards")
+	flagDataShards := flag.Int("d", DefaultDataShards, "data shards")
+	flagParityShards := flag.Int("p", DefaultParityShards, "parity shards")
+	flagShardSize := flag.Int("s", DefaultShardSize, "shard size")
 
 	flag.Parse()
 	for _, fn := range flag.Args() {
-		if err := ParFile(fn, *flagDataShards, *flagParityShards); err != nil {
+		if err := ParFile(fn, *flagDataShards, *flagParityShards, *flagShardSize); err != nil {
 			log.Fatal(err)
 		}
 	}
 }
 
-func ParFile(fn string, D, P int) error {
+func ParFile(fn string, D, P, shardSize int) error {
 	fh, err := os.Open(fn)
 	if err != nil {
 		return errors.Wrap(err, fn)
@@ -63,7 +69,12 @@ func ParFile(fn string, D, P int) error {
 		return errors.Wrap(err, fn+".par")
 	}
 	defer pfh.Close()
-	w, err := NewWriter(pfh, D, P)
+	w, err := FileMetadata{
+		DataShards: uint8(D), ParityShards: uint8(P),
+		ShardSize:  uint32(shardSize),
+		FileName:   filepath.Base(fh.Name()),
+		OnlyParity: true,
+	}.NewWriter(pfh)
 	if err != nil {
 		return err
 	}
@@ -80,25 +91,31 @@ func ParFile(fn string, D, P int) error {
 var _ = io.WriteCloser((*rsWriter)(nil))
 
 type rsWriter struct {
-	w      io.Writer
-	meta   FileMetadata
-	enc    reedsolomon.Encoder
-	data   []byte
-	slices [][]byte
-	i      int
-	Index  uint32
+	w       io.Writer
+	meta    FileMetadata
+	onlyPar bool
+	enc     reedsolomon.Encoder
+	data    []byte
+	slices  [][]byte
+	i       int
+	Index   uint32
 }
 
-func NewWriter(w io.Writer, D, P int) (*rsWriter, error) {
+func (meta FileMetadata) NewWriter(w io.Writer) (*rsWriter, error) {
+	if meta.DataShards == 0 {
+		meta.DataShards = DefaultDataShards
+	}
+	if meta.ParityShards == 0 {
+		meta.ParityShards = DefaultParityShards
+	}
+	D, P := int(meta.DataShards), int(meta.ParityShards)
+	ShardSize := int(meta.ShardSize)
 	rw := rsWriter{
-		w:      w,
-		data:   make([]byte, (D+P)*ShardSize),
-		slices: make([][]byte, D+P),
-		meta: FileMetadata{
-			Version:    Version,
-			ShardSize:  ShardSize,
-			DataShards: uint8(D), ParityShards: uint8(P),
-		},
+		w:       w,
+		onlyPar: meta.OnlyParity,
+		data:    make([]byte, (D+P)*ShardSize),
+		slices:  make([][]byte, D+P),
+		meta:    meta,
 	}
 	var err error
 	if rw.enc, err = reedsolomon.New(D, P); err != nil {
@@ -150,6 +167,7 @@ func (rw *rsWriter) Close() error {
 var crc32cTable = crc32.MakeTable(crc32.Castagnoli)
 
 func (rw *rsWriter) writeShards() error {
+	log.Println(rw.i)
 	maxData := int(rw.meta.DataShards) * int(rw.meta.ShardSize)
 	for i := rw.i; i < maxData; i++ {
 		rw.data[i] = 0
@@ -159,7 +177,8 @@ func (rw *rsWriter) writeShards() error {
 	}
 	for i, b := range rw.slices {
 		n := len(b)
-		if i < int(rw.meta.DataShards) {
+		isDataShard := i < int(rw.meta.DataShards)
+		if isDataShard {
 			if n > rw.i {
 				n = rw.i
 			}
@@ -176,8 +195,10 @@ func (rw *rsWriter) writeShards() error {
 		}); err != nil {
 			return err
 		}
-		if _, err := rw.w.Write(b[:n]); err != nil {
-			return err
+		if !isDataShard || !rw.onlyPar {
+			if _, err := rw.w.Write(b[:n]); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

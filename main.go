@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/klauspost/reedsolomon"
 	"github.com/pkg/errors"
@@ -45,28 +48,153 @@ type ShardMetadata struct {
 }
 
 func main() {
-	flagDataShards := flag.Int("d", DefaultDataShards, "data shards")
-	flagParityShards := flag.Int("p", DefaultParityShards, "parity shards")
-	flagShardSize := flag.Int("s", DefaultShardSize, "shard size")
+	todo := "create"
+	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
+		todo, os.Args[1] = os.Args[1], os.Args[0]
+		os.Args = os.Args[1:]
+	}
+	var dataShards, parityShards, shardSize int
+	createFlags := flag.NewFlagSet("create", flag.ExitOnError)
+	createFlags.IntVar(&dataShards, "d", DefaultDataShards, "data shards")
+	createFlags.IntVar(&parityShards, "p", DefaultParityShards, "parity shards")
+	createFlags.IntVar(&shardSize, "s", DefaultShardSize, "shard size")
 
-	flag.Parse()
-	for _, fn := range flag.Args() {
-		if err := ParFile(fn, *flagDataShards, *flagParityShards, *flagShardSize); err != nil {
+	restoreFlags := flag.NewFlagSet("restore", flag.ExitOnError)
+	restoreFlags.IntVar(&dataShards, "d", 0, "data shards")
+	restoreFlags.IntVar(&parityShards, "p", 0, "parity shards")
+	restoreFlags.IntVar(&shardSize, "s", 0, "shard size")
+	flagOut := restoreFlags.String("o", "-", "output")
+
+	var flagSet *flag.FlagSet
+	switch todo {
+	case "c", "create":
+		todo, flagSet = "create", createFlags
+	case "r", "restore":
+		todo, flagSet = "restore", restoreFlags
+	default:
+		fmt.Fprintf(os.Stderr, `Create the parity file:
+
+	par create [options] <file> [file.par]
+`)
+		createFlags.PrintDefaults()
+		fmt.Fprintf(os.Stderr, `
+Restore the file from the parity:
+
+	par restore <file.par> [file]
+`)
+		restoreFlags.PrintDefaults()
+		os.Exit(1)
+	}
+
+	flagSet.Parse(os.Args[1:])
+	if todo == "create" {
+		inp := flag.Arg(0)
+		out := inp + ".par"
+		if len(flag.Args()) > 1 {
+			out = flag.Arg(1)
+		}
+		if err := CreateParFile(out, inp, dataShards, parityShards, shardSize); err != nil {
 			log.Fatal(err)
 		}
+		return
+	}
+	parFn := flag.Arg(0)
+	fileName := strings.TrimSuffix(parFn, ".par")
+	if len(flag.Args()) > 1 {
+		fileName = flag.Arg(1)
+	}
+	w := io.WriteCloser(os.Stdout)
+	if !(*flagOut == "" || *flagOut == "-") {
+		var err error
+		if w, err = os.Create(*flagOut); err != nil {
+			log.Fatal(err)
+		}
+		defer w.Close()
+	}
+	if err := RestoreParFile(w, parFn, fileName, dataShards, parityShards, shardSize); err != nil {
+		log.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		log.Fatal(err)
 	}
 }
 
-func ParFile(fn string, D, P, shardSize int) error {
-	fh, err := os.Open(fn)
+func RestoreParFile(w io.Writer, parFn, fileName string, D, P, shardSize int) error {
+	pfh, err := os.Open(parFn)
 	if err != nil {
-		return errors.Wrap(err, fn)
+		return errors.Wrap(err, parFn)
+	}
+	defer pfh.Close()
+	r, err := os.Open(fileName)
+	rdr, err := NewParReader(pfh, r, D, P, shardSize)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(w, rdr)
+	return err
+}
+
+func NewParReader(parity, data io.Reader, D, P, shardSize int) (io.Reader, error) {
+	dec := json.NewDecoder(parity)
+	var meta FileMetadata
+	if err := dec.Decode(&meta); err != nil {
+		log.Printf("Read metadata: %v", err)
+		meta.DataShards, meta.ParityShards, meta.ShardSize = uint8(D), uint8(P), uint32(shardSize)
+	}
+
+	return meta.NewReader(io.MultiReader(bytes.NewReader(dec.Buffered()), parity), data), nil
+}
+
+func (meta FileMetadata) NewReader(parity, data io.Reader) io.Reader {
+	if meta.DataShards == 0 {
+		meta.DataShards = DefaultDataShards
+	}
+	if meta.ParityShards == 0 {
+		meta.ParityShards = DefaultParityShards
+	}
+
+	D, P := int(meta.DataShards), int(meta.ParityShards)
+	pr, pw := io.Pipe()
+	go func() {
+		rse := meta.newRSEnc()
+		dec := json.NewDecoder(parity)
+		for {
+			for i := 0; i < D+P; i++ {
+				var sm ShardMetadata
+				if err := dec.Decode(&sm); err != nil {
+					pw.CloseWithError(err)
+					return
+				}
+				if sm.Size == 0 {
+					zero(rse.slices[i])
+					continue
+				}
+			}
+		}
+	}()
+
+	return pr
+}
+
+func zero(p []byte) {
+	for i := range p {
+		p[i] = 0
+	}
+}
+
+func CreateParFile(out, inp string, D, P, shardSize int) error {
+	if out == inp {
+		return errors.New("inp must be differ from out!")
+	}
+	fh, err := os.Open(inp)
+	if err != nil {
+		return errors.Wrap(err, inp)
 	}
 	defer fh.Close()
 
-	pfh, err := os.Create(fn + ".par")
+	pfh, err := os.Create(out)
 	if err != nil {
-		return errors.Wrap(err, fn+".par")
+		return errors.Wrap(err, out)
 	}
 	defer pfh.Close()
 	w, err := FileMetadata{
@@ -90,15 +218,19 @@ func ParFile(fn string, D, P, shardSize int) error {
 
 var _ = io.WriteCloser((*rsWriter)(nil))
 
-type rsWriter struct {
-	w       io.Writer
-	meta    FileMetadata
+type rsEnc struct {
 	onlyPar bool
 	enc     reedsolomon.Encoder
 	data    []byte
 	slices  [][]byte
-	i       int
-	Index   uint32
+}
+
+type rsWriter struct {
+	rsEnc
+	w     io.Writer
+	meta  FileMetadata
+	i     int
+	Index uint32
 }
 
 func (meta FileMetadata) NewWriter(w io.Writer) (*rsWriter, error) {
@@ -108,26 +240,33 @@ func (meta FileMetadata) NewWriter(w io.Writer) (*rsWriter, error) {
 	if meta.ParityShards == 0 {
 		meta.ParityShards = DefaultParityShards
 	}
+	rw := rsWriter{
+		w:     w,
+		meta:  meta,
+		rsEnc: meta.newRSEnc(),
+	}
+	if err := json.NewEncoder(w).Encode(rw.meta); err != nil {
+		return nil, err
+	}
+	return &rw, nil
+}
+
+func (meta FileMetadata) newRSEnc() rsEnc {
 	D, P := int(meta.DataShards), int(meta.ParityShards)
 	ShardSize := int(meta.ShardSize)
-	rw := rsWriter{
-		w:       w,
+	rse := rsEnc{
 		onlyPar: meta.OnlyParity,
 		data:    make([]byte, (D+P)*ShardSize),
 		slices:  make([][]byte, D+P),
-		meta:    meta,
 	}
 	var err error
-	if rw.enc, err = reedsolomon.New(D, P); err != nil {
-		return nil, err
+	if rse.enc, err = reedsolomon.New(D, P); err != nil {
+		panic(errors.Wrapf(err, "D=%d P=%d", D, P))
 	}
-	if err = json.NewEncoder(w).Encode(rw.meta); err != nil {
-		return nil, err
+	for i := range rse.slices {
+		rse.slices[i] = rse.data[i*ShardSize : (i+1)*ShardSize]
 	}
-	for i := range rw.slices {
-		rw.slices[i] = rw.data[i*ShardSize : (i+1)*ShardSize]
-	}
-	return &rw, nil
+	return rse
 }
 
 func (rw *rsWriter) Write(p []byte) (int, error) {

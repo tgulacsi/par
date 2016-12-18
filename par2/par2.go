@@ -21,6 +21,9 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+// Package par2 is for reading/writing PAR2 archives.
+// Definition:
+// http://parchive.sourceforge.net/docs/specifications/parity-volume-spec/article-spec.html
 package par2
 
 import (

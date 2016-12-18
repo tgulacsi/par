@@ -30,6 +30,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/pkg/errors"
 )
 
 const (
@@ -70,7 +72,7 @@ func Stat(file string) (*ParInfo, error) {
 	stat := &ParInfo{
 		ParFiles: parFiles,
 	}
-	packets, err := packets(stat.ParFiles)
+	packets, err := readPackets(nil, stat.ParFiles)
 	if err != nil {
 		return nil, err
 	}
@@ -112,9 +114,11 @@ func Stat(file string) (*ParInfo, error) {
 }
 
 func Verify(info *ParInfo) {
-	total_good := 0
+	totalGood := 0
 	hash := md5.New()
+	var hshBuf MD5
 
+FilesLoop:
 	for _, file := range info.Files {
 		fname := fmt.Sprintf("%s/%s", info.BaseDir, file.Filename)
 		if _, err := os.Stat(fname); os.IsNotExist(err) {
@@ -122,23 +126,31 @@ func Verify(info *ParInfo) {
 			continue
 		}
 
-		good_blocks := 0
-		f, _ := os.Open(fname)
-		defer f.Close()
+		goodBlocks := 0
+		f, err := os.Open(fname)
+		if err != nil {
+			fmt.Printf("\t%s: open: %v\n", fname, err)
+			continue
+		}
 
 		for _, pair := range file.Pairs {
-			buf := make([]byte, info.Main.BlockSize)
-			f.Read(buf)
-			hash.Write(buf)
-			if bytes.Equal(hash.Sum(nil), pair.MD5[:]) {
-				good_blocks++
+			if _, err := io.CopyN(hash, f, int64(info.Main.BlockSize)); err != nil {
+				fmt.Printf("\t%s: read: %v\n", fname, err)
+				f.Close()
+				continue FilesLoop
+			}
+			hash.Sum(hshBuf[:0])
+			if hshBuf == pair.MD5 {
+				goodBlocks++
 			}
 			hash.Reset()
 		}
-		total_good += good_blocks
-		fmt.Printf("\t%s: %d/%d blocks available\n", file.Filename, good_blocks, len(file.Pairs))
+		totalGood += goodBlocks
+		f.Close()
+
+		fmt.Printf("\t%s: %d/%d blocks available\n", file.Filename, goodBlocks, len(file.Pairs))
 	}
-	missing := info.BlockCount - uint32(total_good)
+	missing := info.BlockCount - uint32(totalGood)
 	fmt.Printf("\t-------\n\t%d missing blocks, %d recovery blocks: ", missing, len(info.RecoveryData))
 
 	if missing == 0 {
@@ -156,45 +168,60 @@ func allParFiles(file string) ([]string, error) {
 	return filepath.Glob(dir + fname[:len(fname)-len(ext)] + ".*par2")
 }
 
-func packets(files []string) ([]Packet, error) {
-	packets := make([]Packet, 0)
+func readPackets(packets []Packet, files []string) ([]Packet, error) {
+	packets = packets[:0]
 	for _, par := range files {
 		f, err := os.Open(par)
 		if err != nil {
-			return nil, err
+			return packets, errors.Wrap(err, par)
 		}
 
 		defer f.Close()
-		stat, _ := f.Stat()
-		par_size := stat.Size()
+		stat, err := f.Stat()
+		if err != nil {
+			return packets, errors.Wrap(err, "stat "+f.Name())
+		}
+		parSize := stat.Size()
 
+		var buf []byte
 		for {
-			h := new(Header)
-			if err := h.fill(f); err == io.EOF {
+			var h Header
+			if err := h.readFrom(f); err == io.EOF {
 				break
 			} else if err != nil {
-				return nil, err
+				return packets, err
 			}
 
 			if !h.ValidSequence() {
-				r, _ := f.Seek(-7, os.SEEK_CUR)
-				if (par_size - r) < 8 {
+				r, err := f.Seek(-7, os.SEEK_CUR)
+				if err != nil {
+					return packets, errors.Wrap(err, "Seek -7")
+				}
+				if (parSize - r) < 8 {
 					break
 				}
 				continue
 			}
 
-			buf := make([]byte, h.Length-headerLength)
-			f.Read(buf)
+			n := int(h.Length - headerLength)
+			if cap(buf) < n {
+				buf = make([]byte, n)
+			} else {
+				buf = buf[:n]
+			}
+			if _, err := io.ReadFull(f, buf); err != nil {
+				return packets, err
+			}
 
-			p := createPacket(h)
-			verifyPacket(h, buf)
+			p := h.createPacket()
+			h.verifyPacket(buf)
 			p.readBody(buf)
 
 			if !h.Damaged && !contains(packets, p) {
 				packets = append(packets, p)
 			}
 		}
+		f.Close()
 	}
 
 	return packets, nil
@@ -211,7 +238,7 @@ func contains(packets []Packet, packet Packet) bool {
 	return false
 }
 
-func createPacket(h *Header) Packet {
+func (h *Header) createPacket() Packet {
 	switch string(h.Type[:]) {
 	case typeMainPacket:
 		return &MainPacket{Header: h}
@@ -228,7 +255,7 @@ func createPacket(h *Header) Packet {
 	return &UnknownPacket{h, nil}
 }
 
-func verifyPacket(h *Header, body []byte) {
+func (h *Header) verifyPacket(body []byte) {
 	hash := md5.New()
 	hash.Write(h.RecoverySetID[:])
 	hash.Write(h.Type[:])

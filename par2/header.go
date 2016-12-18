@@ -40,7 +40,7 @@ type Header struct {
 	Damaged       bool
 }
 
-func (h *Header) fill(r io.Reader) error {
+func (h *Header) readFrom(r io.Reader) error {
 	_, err := io.ReadFull(r, h.Sequence[:])
 	if err != nil {
 		return err

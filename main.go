@@ -154,10 +154,18 @@ func (meta FileMetadata) NewReader(parity, data io.Reader) io.Reader {
 
 	D, P := int(meta.DataShards), int(meta.ParityShards)
 	pr, pw := io.Pipe()
+	if (data == nil || parity == data) && meta.OnlyParity {
+		pw.CloseWithError(errors.New("OnlyPar needs separate data file"))
+		return pr
+	}
 	go func() {
+		defer pw.Close()
 		rse := meta.newRSEnc()
 		dec := json.NewDecoder(parity)
+		slices := make([][]byte, len(rse.slices))
 		for {
+			copy(slices, rse.slices)
+			var missing, totalSize int
 			for i := 0; i < D+P; i++ {
 				var sm ShardMetadata
 				if err := dec.Decode(&sm); err != nil {
@@ -165,9 +173,60 @@ func (meta FileMetadata) NewReader(parity, data io.Reader) io.Reader {
 					return
 				}
 				if sm.Size == 0 {
-					zero(rse.slices[i])
+					zero(slices[i])
 					continue
 				}
+				r := parity
+				if meta.OnlyParity {
+					r = data
+				}
+				hsh := crc32.New(crc32cTable)
+				length := int(sm.Size)
+				n, err := io.ReadFull(io.TeeReader(r, hsh), slices[i][:length])
+				totalSize += length
+				if err == nil {
+					if length < len(slices[i]) {
+						zero(slices[i][length:])
+						hsh.Write(slices[i][length:])
+					}
+					got := uint32(hsh.Sum32())
+					if sm.Hash32 != got {
+						log.Printf("%d. shard crc mismatch!", i)
+						slices[i] = nil
+						missing++
+					}
+					continue
+				}
+				log.Printf("Read %d. slice: %+v", err)
+				if sek, ok := r.(io.Seeker); ok {
+					if _, seekErr := sek.Seek(int64(len(slices[i])-n), io.SeekCurrent); seekErr != nil {
+						pw.CloseWithError(errors.Wrapf(err, "seek: %v", seekErr))
+						return
+					}
+					slices[i] = nil // missing slice!
+					missing++
+				}
+
+			}
+
+			if missing > 0 {
+				log.Printf("Has %d missing shards, try to reconstruct...")
+				if err := rse.enc.Reconstruct(slices); err != nil {
+					pw.CloseWithError(errors.Wrap(err, "Reconstruct"))
+					return
+				}
+			}
+			if ok, err := rse.enc.Verify(slices); !ok || err != nil {
+				if err == nil {
+					err = errors.New("Verify failed")
+				}
+				pw.CloseWithError(errors.Wrap(err, "Verify"))
+				return
+			}
+
+			if _, err := pw.Write(rse.data[:totalSize]); err != nil {
+				pw.CloseWithError(err)
+				return
 			}
 		}
 	}()

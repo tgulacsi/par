@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"flag"
@@ -175,15 +176,20 @@ func (meta FileMetadata) NewWriterTo(parity, data io.Reader) io.WriterTo {
 		meta.ParityShards = DefaultParityShards
 	}
 
-	return rsWriterTo{meta: meta, parity: parity, data: data, rsEnc: meta.newRSEnc()}
+	return rsWriterTo{meta: meta,
+		parity: bufio.NewReader(parity),
+		data:   data,
+		rsEnc:  meta.newRSEnc(),
+	}
 }
 
 var _ = io.WriterTo(rsWriterTo{})
 
 type rsWriterTo struct {
 	rsEnc
-	parity, data io.Reader
-	meta         FileMetadata
+	parity *bufio.Reader
+	data   io.Reader
+	meta   FileMetadata
 }
 
 func (rsw rsWriterTo) WriteTo(w io.Writer) (int64, error) {
@@ -192,7 +198,6 @@ func (rsw rsWriterTo) WriteTo(w io.Writer) (int64, error) {
 		return 0, errors.New("OnlyPar needs separate data file")
 	}
 
-	var dec *json.Decoder
 	slices := make([][]byte, len(rsw.slices))
 	var index uint32
 	var written int64
@@ -201,11 +206,15 @@ func (rsw rsWriterTo) WriteTo(w io.Writer) (int64, error) {
 		var missing, totalSize int
 		for i := 0; i < D+P; i++ {
 			index++
-			if dec == nil {
-				dec = json.NewDecoder(rsw.parity)
-			}
 			var sm ShardMetadata
-			if err := dec.Decode(&sm); err != nil {
+			b, err := rsw.parity.ReadBytes('\n')
+			if err != nil {
+				if err == io.EOF && len(b) == 0 {
+					return written, nil
+				}
+				return written, nil
+			}
+			if err := json.Unmarshal(b, &sm); err != nil {
 				return written, err
 			}
 			if sm.Index != index {
@@ -215,31 +224,16 @@ func (rsw rsWriterTo) WriteTo(w io.Writer) (int64, error) {
 				zero(slices[i])
 				continue
 			}
-			r, which := rsw.parity, "parity"
+			r := io.Reader(rsw.parity)
 			if rsw.meta.OnlyParity && i < D {
-				r, which = rsw.data, "data"
-			} else {
-				r = rewind(dec.Buffered(), rsw.parity)
+				r = rsw.data
 			}
 			hsh := crc32.New(crc32cTable)
 			length := int(sm.Size)
-			var p int64
-			if sek, ok := r.(io.Seeker); ok {
-				var seekErr error
-				if p, seekErr = sek.Seek(0, io.SeekCurrent); seekErr != nil {
-					log.Printf("%v.POS %d: %v", r, p, seekErr)
-				}
-			}
-			log.Printf("%d. r=%s [%d] length=%d size=%d", i+1, which, p, length, len(slices[i]))
 			n, err := io.ReadFull(io.TeeReader(r, hsh), slices[i][:length])
-			if sek, ok := r.(io.Seeker); ok {
-				var seekErr error
-				if p, seekErr = sek.Seek(0, io.SeekCurrent); seekErr != nil {
-					log.Printf("%v.POS %d: %v", r, p, seekErr)
-				}
+			if i < D {
+				totalSize += length
 			}
-			log.Printf("Read %d. slice from %s [%d]: %+v", i+1, which, p, err)
-			totalSize += length
 			if err == nil {
 				if length < len(slices[i]) {
 					zero(slices[i][length:])

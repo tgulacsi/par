@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"hash/crc32"
 	"io"
+	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -125,26 +127,47 @@ func RestoreParFile(w io.Writer, parFn, fileName string, D, P, shardSize int) er
 	}
 	defer pfh.Close()
 	r, err := os.Open(fileName)
-	rdr, err := NewParReader(pfh, r, D, P, shardSize)
+	if err != nil {
+		return errors.Wrap(err, fileName)
+	}
+	wr, err := NewParWriterTo(pfh, r, D, P, shardSize)
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(w, rdr)
+	_, err = wr.WriteTo(w)
 	return err
 }
 
-func NewParReader(parity, data io.Reader, D, P, shardSize int) (io.Reader, error) {
+func NewParWriterTo(parity, data io.Reader, D, P, shardSize int) (io.WriterTo, error) {
 	dec := json.NewDecoder(parity)
 	var meta FileMetadata
 	if err := dec.Decode(&meta); err != nil {
 		log.Printf("Read metadata: %v", err)
 		meta.DataShards, meta.ParityShards, meta.ShardSize = uint8(D), uint8(P), uint32(shardSize)
 	}
-
-	return meta.NewReader(io.MultiReader(dec.Buffered(), parity), data), nil
+	return meta.NewWriterTo(rewind(dec.Buffered(), parity), data), nil
 }
 
-func (meta FileMetadata) NewReader(parity, data io.Reader) io.Reader {
+func rewind(ahead, rest io.Reader) io.Reader {
+	sek, ok := rest.(io.Seeker)
+	if !ok {
+		return io.MultiReader(ahead, rest)
+	}
+	b, err := ioutil.ReadAll(ahead)
+	if err != nil {
+		return errReader{err}
+	}
+	n := len(b)
+	if !bytes.HasSuffix(b, []byte{'\n'}) {
+		n--
+	}
+	if _, err := sek.Seek(int64(-n), io.SeekCurrent); err != nil {
+		return errReader{err}
+	}
+	return rest
+}
+
+func (meta FileMetadata) NewWriterTo(parity, data io.Reader) io.WriterTo {
 	if meta.DataShards == 0 {
 		meta.DataShards = DefaultDataShards
 	}
@@ -152,86 +175,112 @@ func (meta FileMetadata) NewReader(parity, data io.Reader) io.Reader {
 		meta.ParityShards = DefaultParityShards
 	}
 
-	D, P := int(meta.DataShards), int(meta.ParityShards)
-	pr, pw := io.Pipe()
-	if (data == nil || parity == data) && meta.OnlyParity {
-		pw.CloseWithError(errors.New("OnlyPar needs separate data file"))
-		return pr
+	return rsWriterTo{meta: meta, parity: parity, data: data, rsEnc: meta.newRSEnc()}
+}
+
+var _ = io.WriterTo(rsWriterTo{})
+
+type rsWriterTo struct {
+	rsEnc
+	parity, data io.Reader
+	meta         FileMetadata
+}
+
+func (rsw rsWriterTo) WriteTo(w io.Writer) (int64, error) {
+	D, P := int(rsw.meta.DataShards), int(rsw.meta.ParityShards)
+	if (rsw.data == nil || rsw.parity == rsw.data) && rsw.meta.OnlyParity {
+		return 0, errors.New("OnlyPar needs separate data file")
 	}
-	go func() {
-		defer pw.Close()
-		rse := meta.newRSEnc()
-		dec := json.NewDecoder(parity)
-		slices := make([][]byte, len(rse.slices))
-		for {
-			copy(slices, rse.slices)
-			var missing, totalSize int
-			for i := 0; i < D+P; i++ {
-				var sm ShardMetadata
-				if err := dec.Decode(&sm); err != nil {
-					pw.CloseWithError(err)
-					return
+
+	var dec *json.Decoder
+	slices := make([][]byte, len(rsw.slices))
+	var index uint32
+	var written int64
+	for {
+		copy(slices, rsw.slices)
+		var missing, totalSize int
+		for i := 0; i < D+P; i++ {
+			index++
+			if dec == nil {
+				dec = json.NewDecoder(rsw.parity)
+			}
+			var sm ShardMetadata
+			if err := dec.Decode(&sm); err != nil {
+				return written, err
+			}
+			if sm.Index != index {
+				return written, errors.Errorf("Index mismatch: got %d, wanted %d.", sm.Index, index)
+			}
+			if sm.Size == 0 {
+				zero(slices[i])
+				continue
+			}
+			r, which := rsw.parity, "parity"
+			if rsw.meta.OnlyParity && i < D {
+				r, which = rsw.data, "data"
+			} else {
+				r = rewind(dec.Buffered(), rsw.parity)
+			}
+			hsh := crc32.New(crc32cTable)
+			length := int(sm.Size)
+			var p int64
+			if sek, ok := r.(io.Seeker); ok {
+				var seekErr error
+				if p, seekErr = sek.Seek(0, io.SeekCurrent); seekErr != nil {
+					log.Printf("%v.POS %d: %v", r, p, seekErr)
 				}
-				if sm.Size == 0 {
-					zero(slices[i])
-					continue
+			}
+			log.Printf("%d. r=%s [%d] length=%d size=%d", i+1, which, p, length, len(slices[i]))
+			n, err := io.ReadFull(io.TeeReader(r, hsh), slices[i][:length])
+			if sek, ok := r.(io.Seeker); ok {
+				var seekErr error
+				if p, seekErr = sek.Seek(0, io.SeekCurrent); seekErr != nil {
+					log.Printf("%v.POS %d: %v", r, p, seekErr)
 				}
-				r := parity
-				if meta.OnlyParity {
-					r = data
+			}
+			log.Printf("Read %d. slice from %s [%d]: %+v", i+1, which, p, err)
+			totalSize += length
+			if err == nil {
+				if length < len(slices[i]) {
+					zero(slices[i][length:])
+					hsh.Write(slices[i][length:])
 				}
-				hsh := crc32.New(crc32cTable)
-				length := int(sm.Size)
-				n, err := io.ReadFull(io.TeeReader(r, hsh), slices[i][:length])
-				totalSize += length
-				if err == nil {
-					if length < len(slices[i]) {
-						zero(slices[i][length:])
-						hsh.Write(slices[i][length:])
-					}
-					got := uint32(hsh.Sum32())
-					if sm.Hash32 != got {
-						log.Printf("%d. shard crc mismatch!", i)
-						slices[i] = nil
-						missing++
-					}
-					continue
-				}
-				log.Printf("Read %d. slice: %+v", err)
-				if sek, ok := r.(io.Seeker); ok {
-					if _, seekErr := sek.Seek(int64(len(slices[i])-n), io.SeekCurrent); seekErr != nil {
-						pw.CloseWithError(errors.Wrapf(err, "seek: %v", seekErr))
-						return
-					}
-					slices[i] = nil // missing slice!
+				got := uint32(hsh.Sum32())
+				if sm.Hash32 != got {
+					log.Printf("%d. shard crc mismatch (got %d, wanted %d)!", i, got, sm.Hash32)
+					slices[i] = nil
 					missing++
 				}
-
+				continue
 			}
-
-			if missing > 0 {
-				log.Printf("Has %d missing shards, try to reconstruct...")
-				if err := rse.enc.Reconstruct(slices); err != nil {
-					pw.CloseWithError(errors.Wrap(err, "Reconstruct"))
-					return
+			if sek, ok := r.(io.Seeker); ok {
+				if _, seekErr := sek.Seek(int64(len(slices[i])-n), io.SeekCurrent); seekErr != nil {
+					return written, errors.Wrapf(err, "seek: %v", seekErr)
 				}
-			}
-			if ok, err := rse.enc.Verify(slices); !ok || err != nil {
-				if err == nil {
-					err = errors.New("Verify failed")
-				}
-				pw.CloseWithError(errors.Wrap(err, "Verify"))
-				return
+				slices[i] = nil // missing slice!
+				missing++
 			}
 
-			if _, err := pw.Write(rse.data[:totalSize]); err != nil {
-				pw.CloseWithError(err)
-				return
+		}
+
+		if missing > 0 {
+			log.Printf("Has %d missing shards, try to reconstruct...")
+			if err := rsw.enc.Reconstruct(slices); err != nil {
+				return written, errors.Wrap(err, "Reconstruct")
 			}
 		}
-	}()
+		if ok, err := rsw.enc.Verify(slices); !ok || err != nil {
+			if err == nil {
+				err = errors.New("Verify failed")
+			}
+			return written, errors.Wrap(err, "Verify")
+		}
 
-	return pr
+		if _, err := w.Write(rsw.rsEnc.data[:totalSize]); err != nil {
+			return written, err
+		}
+	}
+	return written, nil
 }
 
 func zero(p []byte) {
@@ -404,3 +453,7 @@ func (rw *rsWriter) writeShards() error {
 	}
 	return nil
 }
+
+type errReader struct{ err error }
+
+func (r errReader) Read(_ []byte) (int, error) { return 0, r.err }

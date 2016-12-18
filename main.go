@@ -258,7 +258,7 @@ func (rsw rsWriterTo) WriteTo(w io.Writer) (int64, error) {
 		}
 
 		if missing > 0 {
-			log.Printf("Has %d missing shards, try to reconstruct...")
+			log.Printf("Has %d missing shards, try to reconstruct...", missing)
 			if err := rsw.enc.Reconstruct(slices); err != nil {
 				return written, errors.Wrap(err, "Reconstruct")
 			}

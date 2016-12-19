@@ -75,7 +75,7 @@ func (h *Header) recalc(body []byte) {
 	hsh.Sum(h.PacketMD5[:])
 }
 
-func (h *Header) writeTo(w io.Writer, body []byte) error {
+func (h *Header) writeTo(w io.Writer, body []byte) (int64, error) {
 	h.recalc(body)
 
 	{
@@ -85,13 +85,14 @@ func (h *Header) writeTo(w io.Writer, body []byte) error {
 		w.Write(h.PacketMD5[:])
 		w.Write(h.RecoverySetID[:])
 		w.Write(h.Type[:])
-		return w.Err
+		return w.N, w.Err
 	}
 }
 
 type errWriter struct {
 	w   io.Writer
 	Err error
+	N   int64
 }
 
 func (ew *errWriter) Write(p []byte) (int, error) {
@@ -100,5 +101,6 @@ func (ew *errWriter) Write(p []byte) (int, error) {
 	}
 	n, err := ew.w.Write(p)
 	ew.Err = err
+	ew.N += int64(n)
 	return n, err
 }

@@ -26,14 +26,16 @@ package par2
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
+	"sort"
 )
 
 type MainPacket struct {
 	*Header
 	BlockSize             uint64
 	RecoverySetCount      uint32
-	RecoverySetFileIDs    [][]byte
-	NonRecoverySetFileIDs [][]byte
+	RecoverySetFileIDs    []MD5
+	NonRecoverySetFileIDs []MD5
 }
 
 func (m *MainPacket) packetHeader() *Header {
@@ -45,15 +47,13 @@ func (m *MainPacket) readBody(body []byte) {
 	binary.Read(buff, binary.LittleEndian, &m.BlockSize)
 	binary.Read(buff, binary.LittleEndian, &m.RecoverySetCount)
 
-	m.RecoverySetFileIDs = make([][]byte, 0, m.RecoverySetCount)
-	for i := 0; i < int(m.RecoverySetCount); i++ {
-		m.RecoverySetFileIDs = append(m.RecoverySetFileIDs, buff.Next(16))
-	}
-
+	m.RecoverySetFileIDs = make([]MD5, m.RecoverySetCount)
 	nonRecCount := buff.Len() / 16
-	m.NonRecoverySetFileIDs = make([][]byte, 0, nonRecCount)
-	for i := 0; i < nonRecCount; i++ {
-		m.NonRecoverySetFileIDs = append(m.NonRecoverySetFileIDs, buff.Next(16))
+	m.NonRecoverySetFileIDs = make([]MD5, nonRecCount)
+	for _, arr := range [][]MD5{m.RecoverySetFileIDs, m.NonRecoverySetFileIDs} {
+		for i := range arr {
+			copy(arr[i][:], buff.Next(16))
+		}
 	}
 }
 
@@ -62,11 +62,20 @@ func (m *MainPacket) writeBody(dest []byte) []byte {
 	binary.Write(buff, binary.LittleEndian, &m.BlockSize)
 	binary.Write(buff, binary.LittleEndian, &m.RecoverySetCount)
 
-	for _, fid := range m.RecoverySetFileIDs {
-		buff.Write(fid)
-	}
-	for _, fid := range m.NonRecoverySetFileIDs {
-		buff.Write(fid)
+	for _, arr := range [][]MD5{m.RecoverySetFileIDs, m.NonRecoverySetFileIDs} {
+		sortMD5s(arr)
+		for _, fid := range arr {
+			buff.Write(fid[:])
+		}
 	}
 	return buff.Bytes()
+}
+
+func (m *MainPacket) WriteTo(w io.Writer) (int64, error) {
+	return m.Header.writeTo(w, m.writeBody(nil))
+}
+
+// sortMD5s sorts by numerical value (treating them as 16-byte unsigned integers).
+func sortMD5s(p []MD5) {
+	sort.Slice(p, func(i, j int) bool { return bytes.Compare(p[i][:], p[j][:]) == -1 })
 }

@@ -25,6 +25,7 @@ package par2
 
 import (
 	"bytes"
+	"crypto/md5"
 	"encoding/binary"
 	"io"
 )
@@ -57,14 +58,47 @@ func (h *Header) ValidSequence() bool {
 	return bytes.Equal(h.Sequence[:], []byte(validSequence))
 }
 
-func (h *Header) writeTo(w io.Writer) error {
-	_, err := w.Write(h.Sequence[:])
-	if err != nil {
-		return err
+func (h *Header) recalc(body []byte) {
+	// MD5 Hash of packet. Used as a checksum for the packet.
+	// Calculation starts at first byte of Recovery Set ID and
+	// ends at last byte of body.
+	// Does not include the magic sequence, length field or this field.
+	// NB: The MD5 Hash, by its definition, includes the length as if it were appended to the packet.
+	hsh := md5.New()
+	n, _ := hsh.Write(h.RecoverySetID[:])
+	m, _ := hsh.Write(h.Type[:])
+	n += m
+	m, _ = hsh.Write(body)
+	n += m
+	h.Length = uint64(n)
+	binary.Write(hsh, binary.LittleEndian, h.Length)
+	hsh.Sum(h.PacketMD5[:])
+}
+
+func (h *Header) writeTo(w io.Writer, body []byte) error {
+	h.recalc(body)
+
+	{
+		w := &errWriter{w: w}
+		w.Write(h.Sequence[:])
+		binary.Write(w, binary.LittleEndian, h.Length)
+		w.Write(h.PacketMD5[:])
+		w.Write(h.RecoverySetID[:])
+		w.Write(h.Type[:])
+		return w.Err
 	}
-	binary.Write(w, binary.LittleEndian, h.Length)
-	w.Write(h.PacketMD5[:])
-	w.Write(h.RecoverySetID[:])
-	_, err = w.Write(h.Type[:])
-	return err
+}
+
+type errWriter struct {
+	w   io.Writer
+	Err error
+}
+
+func (ew *errWriter) Write(p []byte) (int, error) {
+	if ew.Err != nil {
+		return 0, ew.Err
+	}
+	n, err := ew.w.Write(p)
+	ew.Err = err
+	return n, err
 }

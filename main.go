@@ -129,13 +129,17 @@ func RestoreParFile(w io.Writer, parFn, fileName string, D, P, shardSize int) er
 	}
 	defer pfh.Close()
 	br := bufio.NewReader(pfh)
-	b, err := br.Peek(1)
+	b, err := br.Peek(5)
 	if err != nil {
 		return errors.Wrap(err, parFn)
 	}
 	ver := VersionPAR2
-	if b[0] == '{' {
-		ver = VersionJSON
+	if !bytes.Equal(b, []byte("PAR2\000")) {
+		if b[0] == '{' {
+			ver = VersionJSON
+		} else {
+			return errors.Errorf("unknown parity file start %q", b)
+		}
 	}
 	r, err := os.Open(fileName)
 	if err != nil {

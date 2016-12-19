@@ -19,9 +19,10 @@ import (
 )
 
 const (
-	CRC32S = version(iota)
+	VersionJSON = version(iota)
+	VersionPAR2
 
-	Version             = CRC32S
+	Version             = VersionPAR2
 	DefaultShardSize    = 512 << 10
 	DefaultDataShards   = 10
 	DefaultParityShards = 3
@@ -127,11 +128,20 @@ func RestoreParFile(w io.Writer, parFn, fileName string, D, P, shardSize int) er
 		return errors.Wrap(err, parFn)
 	}
 	defer pfh.Close()
+	br := bufio.NewReader(pfh)
+	b, err := br.Peek(1)
+	if err != nil {
+		return errors.Wrap(err, parFn)
+	}
+	ver := VersionPAR2
+	if b[0] == '{' {
+		ver = VersionJSON
+	}
 	r, err := os.Open(fileName)
 	if err != nil {
 		return errors.Wrap(err, fileName)
 	}
-	wr, err := NewParWriterTo(pfh, r, D, P, shardSize)
+	wr, err := ver.NewParWriterTo(br, r, D, P, shardSize)
 	if err != nil {
 		return err
 	}
@@ -139,14 +149,22 @@ func RestoreParFile(w io.Writer, parFn, fileName string, D, P, shardSize int) er
 	return err
 }
 
-func NewParWriterTo(parity, data io.Reader, D, P, shardSize int) (io.WriterTo, error) {
-	dec := json.NewDecoder(parity)
+func (ver version) NewParWriterTo(parity, data io.Reader, D, P, shardSize int) (io.WriterTo, error) {
 	var meta FileMetadata
-	if err := dec.Decode(&meta); err != nil {
-		log.Printf("Read metadata: %v", err)
-		meta.DataShards, meta.ParityShards, meta.ShardSize = uint8(D), uint8(P), uint32(shardSize)
+	switch ver {
+	case VersionJSON:
+		dec := json.NewDecoder(parity)
+		if err := dec.Decode(&meta); err != nil {
+			log.Printf("Read metadata: %v", err)
+			meta.DataShards, meta.ParityShards, meta.ShardSize = uint8(D), uint8(P), uint32(shardSize)
+		}
+		meta.Version = VersionJSON
+		return meta.NewWriterTo(rewind(dec.Buffered(), parity), data), nil
+	case VersionPAR2:
+		meta.Version = VersionPAR2
+		return meta.NewWriterTo(parity, data), nil
 	}
-	return meta.NewWriterTo(rewind(dec.Buffered(), parity), data), nil
+	return nil, errors.Errorf("unknown version %s", ver)
 }
 
 func rewind(ahead, rest io.Reader) io.Reader {

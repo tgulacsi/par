@@ -28,7 +28,7 @@ import (
 )
 
 type IFSCPacket struct {
-	*Header
+	Header
 	FileID MD5
 	Pairs  []ChecksumPair
 }
@@ -38,7 +38,7 @@ type ChecksumPair struct {
 	CRC32 CRC32
 }
 
-func (i *IFSCPacket) packetHeader() *Header {
+func (i *IFSCPacket) packetHeader() Header {
 	return i.Header
 }
 

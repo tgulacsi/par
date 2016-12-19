@@ -26,11 +26,11 @@ package par2
 import "bytes"
 
 type CreatorPacket struct {
-	*Header
+	Header
 	Creator string
 }
 
-func (c *CreatorPacket) packetHeader() *Header {
+func (c *CreatorPacket) packetHeader() Header {
 	return c.Header
 }
 
@@ -39,5 +39,9 @@ func (c *CreatorPacket) readBody(body []byte) {
 }
 
 func (c *CreatorPacket) writeBody(dest []byte) []byte {
-	return append(dest[:0], []byte(c.Creator)...)
+	b := append(dest[:0], []byte(c.Creator)...)
+	if n := len(b) % 4; n != 0 {
+		b = append(b, []byte{0, 0, 0}[:4-n]...)
+	}
+	return b
 }

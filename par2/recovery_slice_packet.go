@@ -29,12 +29,12 @@ import (
 )
 
 type RecoverySlicePacket struct {
-	*Header
+	Header
 	Exponent     uint32
 	RecoveryData []byte
 }
 
-func (r *RecoverySlicePacket) packetHeader() *Header {
+func (r *RecoverySlicePacket) packetHeader() Header {
 	return r.Header
 }
 

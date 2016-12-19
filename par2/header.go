@@ -41,7 +41,9 @@ type Header struct {
 	Damaged       bool
 }
 
-func (h *Header) readFrom(r io.Reader) error {
+func (h *Header) SetType(typ PacketType) { copy(h.Type[:], typ[:16]) }
+
+func (h Header) readFrom(r io.Reader) error {
 	_, err := io.ReadFull(r, h.Sequence[:])
 	if err != nil {
 		return err
@@ -54,11 +56,12 @@ func (h *Header) readFrom(r io.Reader) error {
 	return err
 }
 
-func (h *Header) ValidSequence() bool {
+func (h Header) ValidSequence() bool {
 	return bytes.Equal(h.Sequence[:], []byte(validSequence))
 }
 
-func (h *Header) recalc(body []byte) {
+func (h Header) recalc(body []byte) {
+	copy(h.Sequence[:], []byte(validSequence))
 	// MD5 Hash of packet. Used as a checksum for the packet.
 	// Calculation starts at first byte of Recovery Set ID and
 	// ends at last byte of body.
@@ -75,7 +78,7 @@ func (h *Header) recalc(body []byte) {
 	hsh.Sum(h.PacketMD5[:])
 }
 
-func (h *Header) writeTo(w io.Writer, body []byte) (int64, error) {
+func (h Header) writeTo(w io.Writer, body []byte) (int64, error) {
 	h.recalc(body)
 
 	{

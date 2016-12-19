@@ -24,11 +24,11 @@
 package par2
 
 type UnknownPacket struct {
-	*Header
+	Header
 	Body []byte
 }
 
-func (u *UnknownPacket) packetHeader() *Header {
+func (u *UnknownPacket) packetHeader() Header {
 	return u.Header
 }
 

@@ -10,7 +10,10 @@ import (
 
 	"github.com/klauspost/reedsolomon"
 	"github.com/pkg/errors"
+	"github.com/tgulacsi/par/par2"
 )
+
+const Creator = "github.com/tgulacsi/par"
 
 func CreateParFile(out, inp string, D, P, shardSize int) error {
 	log.Printf("Create %q for %q.", out, inp)
@@ -68,8 +71,9 @@ var _ = io.WriteCloser((*rsPAR2Writer)(nil))
 
 type rsPAR2Writer struct {
 	rsEnc
-	w    io.Writer
-	meta FileMetadata
+	w       io.Writer
+	meta    FileMetadata
+	mainPkt *par2.MainPacket
 }
 
 func (meta FileMetadata) NewWriter(w io.Writer) (io.WriteCloser, error) {
@@ -86,7 +90,19 @@ func (meta FileMetadata) NewWriter(w io.Writer) (io.WriteCloser, error) {
 		}
 		rw = &jsw
 	case VersionPAR2:
-		rw = &rsPAR2Writer{w: w, meta: meta, rsEnc: meta.newRSEnc()}
+		prw := rsPAR2Writer{
+			w: w, meta: meta, rsEnc: meta.newRSEnc(),
+			mainPkt: par2.CreatePacket(par2.TypeMainPacket).(*par2.MainPacket)}
+		fh, err := os.Open(meta.FileName)
+		if err != nil {
+			return nil, errors.Wrap(err, meta.FileName)
+		}
+		fDescPkt, err := prw.mainPkt.Add(fh, meta.FileName)
+		fh.Close()
+		if err != nil {
+			return nil, err
+		}
+		rw = &prw
 	default:
 		return nil, errors.Wrapf(ErrUnknownVersion, "%s", meta.Version)
 	}
@@ -197,6 +213,10 @@ func (rw *rsJSONWriter) writeShards() error {
 }
 
 func (rw *rsPAR2Writer) Close() error {
+	crPkt := par2.CreatePacket(par2.TypeCreatorPacket).(*par2.CreatorPacket)
+	crPkt.Creator = Creator
+	_, err := par2.WritePacket(rw.w, crPkt)
+	return err
 }
 
 func (rw *rsPAR2Writer) Write(p []byte) (int, error) {

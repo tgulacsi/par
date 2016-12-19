@@ -25,20 +25,25 @@ package par2
 
 import (
 	"bytes"
+	"crypto/md5"
 	"encoding/binary"
 	"io"
+	"os"
+	"path/filepath"
 	"sort"
+
+	"github.com/pkg/errors"
 )
 
 type MainPacket struct {
-	*Header
+	Header
 	BlockSize             uint64
 	RecoverySetCount      uint32
 	RecoverySetFileIDs    []MD5
 	NonRecoverySetFileIDs []MD5
 }
 
-func (m *MainPacket) packetHeader() *Header {
+func (m *MainPacket) packetHeader() Header {
 	return m.Header
 }
 
@@ -58,6 +63,8 @@ func (m *MainPacket) readBody(body []byte) {
 }
 
 func (m *MainPacket) writeBody(dest []byte) []byte {
+	m.RecoverySetCount = uint32(len(m.RecoverySetFileIDs))
+
 	buff := bytes.NewBuffer(dest)
 	binary.Write(buff, binary.LittleEndian, &m.BlockSize)
 	binary.Write(buff, binary.LittleEndian, &m.RecoverySetCount)
@@ -77,5 +84,53 @@ func (m *MainPacket) WriteTo(w io.Writer) (int64, error) {
 
 // sortMD5s sorts by numerical value (treating them as 16-byte unsigned integers).
 func sortMD5s(p []MD5) {
-	sort.Slice(p, func(i, j int) bool { return bytes.Compare(p[i][:], p[j][:]) == -1 })
+	sort.Slice(p, func(i, j int) bool {
+		var a, b MD5
+		// reverse from Little-Endian to Big-Endian
+		for i, c := range p[i] {
+			a[15-i] = c
+		}
+		for i, c := range p[j] {
+			b[15-i] = c
+		}
+
+		return bytes.Compare(a[:], b[:]) == -1
+	})
+}
+
+func (m *MainPacket) AddFile(fileName string) (*FileDescPacket, error) {
+	fh, err := os.Open(fileName)
+	if err != nil {
+		return nil, errors.Wrap(err, fileName)
+	}
+	defer fh.Close()
+	return m.Add(fh, fh.Name())
+}
+
+func (m *MainPacket) Add(r io.Reader, name string) (*FileDescPacket, error) {
+	h := m.Header
+	h.SetType(TypeFileDescPacket)
+	fDesc := h.Create().(*FileDescPacket)
+	fDesc.FileName = filepath.Base(name)
+
+	h.SetType(TypeIFSCPacket)
+	hsh := md5.New()
+	n, err := io.CopyN(hsh, r, 16<<10)
+	fDesc.FileLength = uint64(n)
+	hsh.Sum(fDesc.MiniMD5[:])
+	if err != nil {
+		if err != io.EOF {
+			return fDesc, errors.Wrap(err, name)
+		}
+		fDesc.MD5 = fDesc.MiniMD5
+	} else {
+		if n, err = io.Copy(hsh, r); err != nil {
+			return fDesc, errors.Wrap(err, name)
+		}
+		fDesc.FileLength += uint64(n)
+		hsh.Sum(fDesc.MD5[:])
+	}
+	fDesc.recalc()
+	m.RecoverySetFileIDs = append(m.RecoverySetFileIDs, fDesc.FileID)
+	return fDesc, nil
 }

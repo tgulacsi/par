@@ -38,18 +38,21 @@ import (
 )
 
 const (
-	headerLength            uint64 = 0x40
-	typeMainPacket          string = "PAR 2.0\000Main\000\000\000\000"
-	typeFileDescPacket      string = "PAR 2.0\000FileDesc"
-	typeIFSCPacket          string = "PAR 2.0\000IFSC\000\000\000\000"
-	typeRecoverySlicePacket string = "PAR 2.0\000RecvSlic"
-	typeCreatorPacket       string = "PAR 2.0\000Creator\000"
+	headerLength uint64 = 0x40
+
+	TypeMainPacket          = PacketType("PAR 2.0\000Main\000\000\000\000")
+	TypeFileDescPacket      = PacketType("PAR 2.0\000FileDesc")
+	TypeIFSCPacket          = PacketType("PAR 2.0\000IFSC\000\000\000\000")
+	TypeRecoverySlicePacket = PacketType("PAR 2.0\000RecvSlic")
+	TypeCreatorPacket       = PacketType("PAR 2.0\000Creator\000")
 )
+
+type PacketType string
 
 type Packet interface {
 	readBody([]byte)
 	writeBody([]byte) []byte
-	packetHeader() *Header
+	packetHeader() Header
 }
 
 type ParInfo struct {
@@ -123,9 +126,9 @@ func Verify(info *ParInfo) {
 
 FilesLoop:
 	for _, file := range info.Files {
-		fname := fmt.Sprintf("%s/%s", info.BaseDir, file.Filename)
+		fname := fmt.Sprintf("%s/%s", info.BaseDir, file.FileName)
 		if _, err := os.Stat(fname); os.IsNotExist(err) {
-			fmt.Printf("\t%s: missing\n", file.Filename)
+			fmt.Printf("\t%s: missing\n", file.FileName)
 			continue
 		}
 
@@ -151,7 +154,7 @@ FilesLoop:
 		totalGood += goodBlocks
 		f.Close()
 
-		fmt.Printf("\t%s: %d/%d blocks available\n", file.Filename, goodBlocks, len(file.Pairs))
+		fmt.Printf("\t%s: %d/%d blocks available\n", file.FileName, goodBlocks, len(file.Pairs))
 	}
 	missing := info.BlockCount - uint32(totalGood)
 	fmt.Printf("\t-------\n\t%d missing blocks, %d recovery blocks: ", missing, len(info.RecoveryData))
@@ -216,7 +219,7 @@ func readPackets(packets []Packet, files []string) ([]Packet, error) {
 				return packets, err
 			}
 
-			p := h.createPacket()
+			p := h.Create()
 			h.verifyPacket(buf)
 			p.readBody(buf)
 
@@ -241,24 +244,37 @@ func contains(packets []Packet, packet Packet) bool {
 	return false
 }
 
-func (h *Header) createPacket() Packet {
-	switch string(h.Type[:]) {
-	case typeMainPacket:
+// Create a packet containing this Header, with the proper type.
+func (h Header) Create() Packet {
+	switch PacketType(h.Type[:]) {
+	case TypeMainPacket:
 		return &MainPacket{Header: h}
-	case typeFileDescPacket:
+	case TypeFileDescPacket:
 		return &FileDescPacket{Header: h}
-	case typeIFSCPacket:
+	case TypeIFSCPacket:
 		return &IFSCPacket{Header: h}
-	case typeRecoverySlicePacket:
+	case TypeRecoverySlicePacket:
 		return &RecoverySlicePacket{Header: h}
-	case typeCreatorPacket:
+	case TypeCreatorPacket:
 		return &CreatorPacket{Header: h}
 	}
 
-	return &UnknownPacket{h, nil}
+	return &UnknownPacket{Header: h}
 }
 
-func (h *Header) verifyPacket(body []byte) {
+func CreatePacket(typ PacketType) Packet {
+	var h Header
+	copy(h.Type[:], []byte(typ[:16]))
+	return h.Create()
+}
+
+func WritePacket(w io.Writer, p Packet) (int64, error) {
+	return p.(interface {
+		writeTo(io.Writer, []byte) (int64, error)
+	}).writeTo(w, p.writeBody(nil))
+}
+
+func (h Header) verifyPacket(body []byte) {
 	hash := md5.New()
 	hash.Write(h.RecoverySetID[:])
 	hash.Write(h.Type[:])

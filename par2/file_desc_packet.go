@@ -25,19 +25,21 @@ package par2
 
 import (
 	"bytes"
+	"crypto/md5"
 	"encoding/binary"
+	"io"
 )
 
 type FileDescPacket struct {
-	*Header
+	Header
 	FileID     MD5
 	MD5        MD5
 	MiniMD5    MD5
 	FileLength uint64
-	Filename   string
+	FileName   string
 }
 
-func (f *FileDescPacket) packetHeader() *Header {
+func (f *FileDescPacket) packetHeader() Header {
 	return f.Header
 }
 
@@ -47,21 +49,43 @@ func (f *FileDescPacket) readBody(body []byte) {
 	copy(f.MD5[:], buff.Next(16))
 	copy(f.MiniMD5[:], buff.Next(16))
 	binary.Read(buff, binary.LittleEndian, &f.FileLength)
-	f.Filename = string(bytes.TrimRight(buff.Next(buff.Len()), "\000"))
+	f.FileName = string(bytes.TrimRight(buff.Next(buff.Len()), "\000"))
+}
+
+func (f *FileDescPacket) recalc() {
+	// The File ID in this version is calculated as the MD5 Hash of the last 3 fields of the body of this packet:
+	// MD5-16k, length, and ASCII file name.
+	// Note: The length and MD5-16k are included because the Recovery Set ID is a hash of the File IDs
+	// and the Recovery Set ID should be a function of file contents as well as names.
+
+	hsh := md5.New()
+	hsh.Write(f.MiniMD5[:])
+	binary.Write(hsh, binary.LittleEndian, f.FileLength)
+	writeString(hsh, f.FileName)
+
+	hsh.Sum(f.FileID[:])
+}
+
+func writeString(w io.Writer, s string) (int, error) {
+	n, err := io.WriteString(w, s)
+	if err != nil {
+		return n, err
+	}
+	if k := n % 4; k != 0 {
+		k, err = w.Write([]byte{0, 0, 0}[:4-k])
+		n += k
+	}
+	return n, err
 }
 
 func (f *FileDescPacket) writeBody(dest []byte) []byte {
+	f.recalc()
+
 	buff := bytes.NewBuffer(dest)
 	buff.Write(f.FileID[:])
 	buff.Write(f.MD5[:])
 	buff.Write(f.MiniMD5[:])
 	binary.Write(buff, binary.LittleEndian, f.FileLength)
-	buff.WriteString(f.Filename)
-	for n := len(f.Filename) % 4; n != 0; n-- {
-		if n == 0 {
-			break
-		}
-		buff.WriteByte(0)
-	}
+	writeString(buff, f.FileName)
 	return buff.Bytes()
 }

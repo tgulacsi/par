@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"hash/crc32"
@@ -14,11 +15,13 @@ const (
 	VersionJSON = version(iota)
 	VersionPAR2
 
-	Version             = VersionPAR2
+	DefaultVersion      = VersionPAR2
 	DefaultShardSize    = 512 << 10
 	DefaultDataShards   = 10
 	DefaultParityShards = 3
 )
+
+var ErrUnknownVersion = errors.New("unknown version")
 
 type version uint8
 

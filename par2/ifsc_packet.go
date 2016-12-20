@@ -23,9 +23,7 @@
 
 package par2
 
-import (
-	"bytes"
-)
+import "bytes"
 
 type IFSCPacket struct {
 	Header

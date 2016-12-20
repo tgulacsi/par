@@ -89,11 +89,13 @@ func (meta FileMetadata) NewWriterTo(parity, data io.Reader) io.WriterTo {
 		meta.ParityShards = DefaultParityShards
 	}
 
-	return rsWriterTo{meta: meta,
+	rsw := rsWriterTo{
+		meta:   meta,
 		parity: bufio.NewReader(parity),
 		data:   data,
-		rsEnc:  meta.newRSEnc(),
 	}
+	rsw.rsEnc = meta.newRSEnc(rsw.writeShards)
+	return &rsw
 }
 
 var _ = io.WriterTo(rsWriterTo{})

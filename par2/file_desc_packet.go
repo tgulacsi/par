@@ -63,7 +63,7 @@ func (f *FileDescPacket) recalc() {
 	binary.Write(hsh, binary.LittleEndian, f.FileLength)
 	writeString(hsh, f.FileName)
 
-	hsh.Sum(f.FileID[:])
+	hsh.Sum(f.FileID[:0])
 }
 
 func writeString(w io.Writer, s string) (int, error) {

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"encoding/json"
-	"hash/crc32"
 	"io"
 	"log"
 	"os"
@@ -10,10 +8,7 @@ import (
 
 	"github.com/klauspost/reedsolomon"
 	"github.com/pkg/errors"
-	"github.com/tgulacsi/par/par2"
 )
-
-const Creator = "github.com/tgulacsi/par"
 
 func CreateParFile(out, inp string, D, P, shardSize int) error {
 	log.Printf("Create %q for %q.", out, inp)
@@ -31,6 +26,9 @@ func CreateParFile(out, inp string, D, P, shardSize int) error {
 		return errors.Wrap(err, out)
 	}
 	defer pfh.Close()
+	if n := shardSize % 4; n != 0 {
+		shardSize += 4 - n
+	}
 	w, err := FileMetadata{
 		DataShards: uint8(D), ParityShards: uint8(P),
 		ShardSize:  uint32(shardSize),
@@ -51,66 +49,32 @@ func CreateParFile(out, inp string, D, P, shardSize int) error {
 	return errors.Wrap(pfh.Close(), pfh.Name())
 }
 
-var _ = io.WriteCloser((*rsJSONWriter)(nil))
-
 type rsEnc struct {
-	enc    reedsolomon.Encoder
-	data   []byte
-	slices [][]byte
-}
-
-type rsJSONWriter struct {
-	rsEnc
-	w     io.Writer
-	meta  FileMetadata
-	i     int
-	Index uint32
-}
-
-var _ = io.WriteCloser((*rsPAR2Writer)(nil))
-
-type rsPAR2Writer struct {
-	rsEnc
-	w       io.Writer
-	meta    FileMetadata
-	mainPkt *par2.MainPacket
+	enc                   reedsolomon.Encoder
+	data                  []byte
+	slices                [][]byte
+	DataShards, ShardSize int
+	i                     int
+	writeShards           func([][]byte, int) error
 }
 
 func (meta FileMetadata) NewWriter(w io.Writer) (io.WriteCloser, error) {
 	var rw io.WriteCloser
+	var err error
+
 	switch meta.Version {
 	case VersionJSON:
-		jsw := rsJSONWriter{
-			w:     w,
-			meta:  meta,
-			rsEnc: meta.newRSEnc(),
-		}
-		if err := jsw.writeHeader(); err != nil {
-			return nil, err
-		}
-		rw = &jsw
+		rw, err = NewRSJSONWriter(w, meta)
 	case VersionPAR2:
-		prw := rsPAR2Writer{
-			w: w, meta: meta, rsEnc: meta.newRSEnc(),
-			mainPkt: par2.CreatePacket(par2.TypeMainPacket).(*par2.MainPacket)}
-		fh, err := os.Open(meta.FileName)
-		if err != nil {
-			return nil, errors.Wrap(err, meta.FileName)
-		}
-		fDescPkt, err := prw.mainPkt.Add(fh, meta.FileName)
-		fh.Close()
-		if err != nil {
-			return nil, err
-		}
-		rw = &prw
+		rw, err = NewPAR2Writer(w, meta)
 	default:
-		return nil, errors.Wrapf(ErrUnknownVersion, "%s", meta.Version)
+		err = errors.Wrapf(ErrUnknownVersion, "%s", meta.Version)
 	}
 
-	return rw, nil
+	return rw, err
 }
 
-func (meta *FileMetadata) newRSEnc() rsEnc {
+func (meta *FileMetadata) newRSEnc(writeShards func([][]byte, int) error) rsEnc {
 	if meta.DataShards == 0 {
 		meta.DataShards = DefaultDataShards
 	}
@@ -120,11 +84,16 @@ func (meta *FileMetadata) newRSEnc() rsEnc {
 	if meta.ShardSize == 0 {
 		meta.ShardSize = DefaultShardSize
 	}
+	if n := meta.ShardSize % 4; n != 0 {
+		n += 4 - n
+	}
 	D, P := int(meta.DataShards), int(meta.ParityShards)
 	shardSize := int(meta.ShardSize)
 	rse := rsEnc{
-		data:   make([]byte, (D+P)*shardSize),
-		slices: make([][]byte, D+P),
+		data:        make([]byte, (D+P)*shardSize),
+		slices:      make([][]byte, D+P),
+		writeShards: writeShards,
+		DataShards:  D, ShardSize: shardSize,
 	}
 	var err error
 	if rse.enc, err = reedsolomon.New(D, P); err != nil {
@@ -136,28 +105,27 @@ func (meta *FileMetadata) newRSEnc() rsEnc {
 	return rse
 }
 
-func (rw *rsJSONWriter) writeHeader() error {
-	return json.NewEncoder(rw.w).Encode(rw.meta)
-}
-
-func (rw *rsJSONWriter) Write(p []byte) (int, error) {
+func (rse *rsEnc) Write(p []byte) (int, error) {
+	log.Printf("Write(%d)", len(p))
 	if len(p) == 0 {
 		return 0, nil
 	}
 	var written int
-	maxData := int(rw.meta.DataShards) * int(rw.meta.ShardSize)
+	maxData := rse.DataShards * rse.ShardSize
 	for len(p) > 0 {
-		n, full := maxData-rw.i, true
+		n, full := maxData-rse.i, true
 		if n > len(p) {
 			n, full = len(p), false
 		}
-		copy(rw.data[rw.i:], p[:n])
-		rw.i += n
+		copy(rse.data[rse.i:], p[:n])
+		rse.i += n
 		if !full {
 			written += n
 			break
 		}
-		if err := rw.writeShards(); err != nil {
+
+		// full, write out shards
+		if err := rse.WriteShards(); err != nil {
 			return written, err
 		}
 		p = p[n:]
@@ -166,58 +134,16 @@ func (rw *rsJSONWriter) Write(p []byte) (int, error) {
 	return written, nil
 }
 
-func (rw *rsJSONWriter) Close() error {
-	if rw.i == 0 {
-		return nil
+func (rse *rsEnc) WriteShards() error {
+	maxData := rse.DataShards * rse.ShardSize
+	zero(rse.data[rse.i:maxData])
+	if err := rse.enc.Encode(rse.slices); err != nil {
+		return errors.Wrapf(err, "RS encode %#v", rse.slices)
 	}
-	err := rw.writeShards()
-	rw.data = nil
-	rw.slices = nil
-	rw.w = nil
-	return err
-}
-
-func (rw *rsJSONWriter) writeShards() error {
-	maxData := int(rw.meta.DataShards) * int(rw.meta.ShardSize)
-	zero(rw.data[rw.i:maxData])
-	if err := rw.enc.Encode(rw.slices); err != nil {
-		return errors.Wrapf(err, "RS encode %#v", rw.slices)
+	log.Printf("WriteShards %p", rse.writeShards)
+	if err := rse.writeShards(rse.slices, rse.i); err != nil {
+		return err
 	}
-	for i, b := range rw.slices {
-		n := len(b)
-		isDataShard := i < int(rw.meta.DataShards)
-		if isDataShard {
-			if n > rw.i {
-				n = rw.i
-			}
-			rw.i -= n
-		}
-
-		hsh := crc32.New(crc32cTable)
-		hsh.Write(b[:n])
-		rw.Index++
-		if err := json.NewEncoder(rw.w).Encode(ShardMetadata{
-			Index:  rw.Index,
-			Size:   uint32(n),
-			Hash32: hsh.Sum32(),
-		}); err != nil {
-			return err
-		}
-		if !isDataShard || !rw.meta.OnlyParity {
-			if _, err := rw.w.Write(b[:n]); err != nil {
-				return err
-			}
-		}
-	}
+	rse.i = 0
 	return nil
-}
-
-func (rw *rsPAR2Writer) Close() error {
-	crPkt := par2.CreatePacket(par2.TypeCreatorPacket).(*par2.CreatorPacket)
-	crPkt.Creator = Creator
-	_, err := par2.WritePacket(rw.w, crPkt)
-	return err
-}
-
-func (rw *rsPAR2Writer) Write(p []byte) (int, error) {
 }

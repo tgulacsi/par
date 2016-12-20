@@ -75,7 +75,7 @@ func (h Header) recalc(body []byte) {
 	n += m
 	h.Length = uint64(n)
 	binary.Write(hsh, binary.LittleEndian, h.Length)
-	hsh.Sum(h.PacketMD5[:])
+	hsh.Sum(h.PacketMD5[:0])
 }
 
 func (h Header) writeTo(w io.Writer, body []byte) (int64, error) {

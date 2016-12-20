@@ -117,7 +117,7 @@ func (m *MainPacket) Add(r io.Reader, name string) (*FileDescPacket, error) {
 	hsh := md5.New()
 	n, err := io.CopyN(hsh, r, 16<<10)
 	fDesc.FileLength = uint64(n)
-	hsh.Sum(fDesc.MiniMD5[:])
+	hsh.Sum(fDesc.MiniMD5[:0])
 	if err != nil {
 		if err != io.EOF {
 			return fDesc, errors.Wrap(err, name)
@@ -128,9 +128,10 @@ func (m *MainPacket) Add(r io.Reader, name string) (*FileDescPacket, error) {
 			return fDesc, errors.Wrap(err, name)
 		}
 		fDesc.FileLength += uint64(n)
-		hsh.Sum(fDesc.MD5[:])
+		hsh.Sum(fDesc.MD5[:0])
 	}
 	fDesc.recalc()
 	m.RecoverySetFileIDs = append(m.RecoverySetFileIDs, fDesc.FileID)
+	m.recalc(m.writeBody(nil))
 	return fDesc, nil
 }

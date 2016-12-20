@@ -41,7 +41,7 @@ func (i *IFSCPacket) packetHeader() Header {
 }
 
 func (i *IFSCPacket) readBody(body []byte) {
-	buff := bytes.NewBuffer(body)
+	buff := bytes.NewBuffer(body[:0])
 	copy(i.FileID[:], buff.Next(16))
 
 	pairCount := buff.Len() / 20
@@ -55,7 +55,7 @@ func (i *IFSCPacket) readBody(body []byte) {
 }
 
 func (i *IFSCPacket) writeBody(dest []byte) []byte {
-	buff := bytes.NewBuffer(dest)
+	buff := bytes.NewBuffer(dest[:0])
 	buff.Write(i.FileID[:])
 	for _, pair := range i.Pairs {
 		buff.Write(pair.MD5[:])

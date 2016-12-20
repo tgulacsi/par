@@ -39,7 +39,7 @@ func (r *RecoverySlicePacket) packetHeader() Header {
 }
 
 func (r *RecoverySlicePacket) readBody(body []byte) {
-	buff := bytes.NewBuffer(body)
+	buff := bytes.NewBuffer(body[:0])
 	binary.Read(buff, binary.LittleEndian, &r.Exponent)
 
 	r.RecoveryData = buff.Next(int(r.Header.Length) - 4)
@@ -50,7 +50,7 @@ func (r *RecoverySlicePacket) AvailableBlocks(blocksize uint64) uint64 {
 }
 
 func (r *RecoverySlicePacket) writeBody(dest []byte) []byte {
-	buff := bytes.NewBuffer(dest)
+	buff := bytes.NewBuffer(dest[:0])
 	binary.Write(buff, binary.LittleEndian, r.Exponent)
 	buff.Write(r.RecoveryData)
 	return buff.Bytes()

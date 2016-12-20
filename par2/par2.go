@@ -31,8 +31,10 @@ import (
 	"crypto/md5"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/pkg/errors"
 )
@@ -72,20 +74,28 @@ type CRC32 [4]byte
 func Stat(file string) (*ParInfo, error) {
 	parFiles, err := allParFiles(file)
 	if err != nil {
-		return nil, err
+		return nil, errors.WithMessage(err, "list par files")
+	}
+	if len(parFiles) == 0 {
+		return nil, errors.New("No par file found")
 	}
 
 	stat := &ParInfo{
 		ParFiles: parFiles,
 	}
+
+	return stat, stat.Parse()
+}
+
+func (stat *ParInfo) Parse() error {
 	packets, err := readPackets(nil, stat.ParFiles)
 	if err != nil {
-		return nil, err
+		return errors.WithMessage(err, "read packets")
 	}
 	stat.Files = make([]*File, 0, len(packets))
 	stat.RecoveryData = make([]*RecoverySlicePacket, 0, len(packets))
 
-	stat.BaseDir = filepath.Dir(file)
+	stat.BaseDir = filepath.Dir(stat.ParFiles[0])
 	table := make(map[MD5]*File)
 	for _, p := range packets {
 		switch x := p.(type) {
@@ -102,7 +112,7 @@ func Stat(file string) (*ParInfo, error) {
 				val.FileDescPacket = tmp
 				stat.Files = append(stat.Files, val)
 			} else {
-				table[tmp.FileID] = &File{tmp, nil}
+				table[tmp.FileID] = &File{FileDescPacket: tmp}
 			}
 		case *IFSCPacket:
 			tmp := x
@@ -111,12 +121,12 @@ func Stat(file string) (*ParInfo, error) {
 				val.IFSCPacket = tmp
 				stat.Files = append(stat.Files, val)
 			} else {
-				table[tmp.FileID] = &File{nil, tmp}
+				table[tmp.FileID] = &File{IFSCPacket: tmp}
 			}
 		}
 	}
 
-	return stat, nil
+	return nil
 }
 
 func Verify(info *ParInfo) {
@@ -171,11 +181,19 @@ FilesLoop:
 func allParFiles(file string) ([]string, error) {
 	dir, fname := filepath.Split(file)
 	ext := filepath.Ext(fname)
-	return filepath.Glob(dir + fname[:len(fname)-len(ext)] + ".*par2")
+	glob := dir + fname[:len(fname)-len(ext)] + ".*par2"
+	files, err := filepath.Glob(glob)
+	return files, errors.Wrap(err, glob)
 }
 
 func readPackets(packets []Packet, files []string) ([]Packet, error) {
+	if len(files) == 0 {
+		log.Printf("No files provided.")
+		return nil, nil
+	}
 	packets = packets[:0]
+	buf := bytesPool.Get()
+	defer bytesPool.Put(buf)
 	for _, par := range files {
 		f, err := os.Open(par)
 		if err != nil {
@@ -189,17 +207,15 @@ func readPackets(packets []Packet, files []string) ([]Packet, error) {
 		}
 		parSize := stat.Size()
 
-		var buf []byte
 		for {
 			var h Header
 			if err := h.readFrom(f); err == io.EOF {
 				break
 			} else if err != nil {
-				return packets, err
+				return packets, errors.Wrapf(err, "readFrom %q", f.Name())
 			}
-
 			if !h.ValidSequence() {
-				r, err := f.Seek(-7, os.SEEK_CUR)
+				r, err := f.Seek(-7, io.SeekCurrent)
 				if err != nil {
 					return packets, errors.Wrap(err, "Seek -7")
 				}
@@ -212,11 +228,12 @@ func readPackets(packets []Packet, files []string) ([]Packet, error) {
 			n := int(h.Length - headerLength)
 			if cap(buf) < n {
 				buf = make([]byte, n)
+				defer bytesPool.Put(buf)
 			} else {
 				buf = buf[:n]
 			}
 			if _, err := io.ReadFull(f, buf); err != nil {
-				return packets, err
+				return packets, errors.Wrapf(err, "read %d bytes from %q", n, f.Name())
 			}
 
 			p := h.Create()
@@ -269,9 +286,11 @@ func CreatePacket(typ PacketType) Packet {
 }
 
 func WritePacket(w io.Writer, p Packet) (int64, error) {
+	b := bytesPool.Get()
+	defer bytesPool.Put(b)
 	return p.(interface {
 		writeTo(io.Writer, []byte) (int64, error)
-	}).writeTo(w, p.writeBody(nil))
+	}).writeTo(w, p.writeBody(b))
 }
 
 func (h Header) verifyPacket(body []byte) {
@@ -280,5 +299,23 @@ func (h Header) verifyPacket(body []byte) {
 	hash.Write(h.Type[:])
 	hash.Write(body)
 
-	h.Damaged = (len(body)%4) != 0 || !bytes.Equal(hash.Sum(nil), h.PacketMD5[:])
+	b := bytesPool.Get()
+	defer bytesPool.Put(b)
+	h.Damaged = (len(body)%4) != 0 || !bytes.Equal(hash.Sum(b), h.PacketMD5[:])
+}
+
+var bytesPool = byteSlices{Pool: sync.Pool{New: func() interface{} { return make([]byte, 0, 1024) }}}
+
+type byteSlices struct {
+	sync.Pool
+}
+
+func (bs byteSlices) Get() []byte {
+	return bs.Pool.Get().([]byte)[:0]
+}
+func (bs byteSlices) Put(p []byte) {
+	if cap(p) == 0 {
+		return
+	}
+	bs.Pool.Put(p[:0])
 }

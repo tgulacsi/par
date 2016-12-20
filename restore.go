@@ -11,6 +11,7 @@ import (
 	"os"
 
 	"github.com/pkg/errors"
+	"github.com/tgulacsi/par/par2"
 )
 
 func RestoreParFile(w io.Writer, parFn, fileName string, D, P, shardSize int) error {
@@ -32,6 +33,17 @@ func RestoreParFile(w io.Writer, parFn, fileName string, D, P, shardSize int) er
 			return errors.Errorf("unknown parity file start %q", b)
 		}
 	}
+
+	if ver == VersionPAR2 {
+		info := par2.ParInfo{ParFiles: []string{parFn}}
+		err := info.Parse()
+		log.Printf("info=%#v err=%+v", info, err)
+		if err == nil && info.Main == nil {
+			err = errors.New("empty par file: " + parFn)
+		}
+		return err
+	}
+
 	r, err := os.Open(fileName)
 	if err != nil {
 		return errors.Wrap(err, fileName)
@@ -81,16 +93,19 @@ func rewind(ahead, rest io.Reader) io.Reader {
 	return rest
 }
 
-func (meta FileMetadata) NewWriterTo(parity, data io.Reader) io.WriterTo {
+func (meta *FileMetadata) NewWriterTo(parity, data io.Reader) io.WriterTo {
 	if meta.DataShards == 0 {
 		meta.DataShards = DefaultDataShards
 	}
 	if meta.ParityShards == 0 {
 		meta.ParityShards = DefaultParityShards
 	}
+	if n := meta.ShardSize % 4; n != 0 && meta.Version == VersionPAR2 {
+		meta.ShardSize += 4 - n
+	}
 
 	rsw := rsWriterTo{
-		meta:   meta,
+		meta:   *meta,
 		parity: bufio.NewReader(parity),
 		data:   data,
 	}

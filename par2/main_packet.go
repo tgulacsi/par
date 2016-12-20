@@ -48,7 +48,7 @@ func (m *MainPacket) packetHeader() Header {
 }
 
 func (m *MainPacket) readBody(body []byte) {
-	buff := bytes.NewBuffer(body)
+	buff := bytes.NewBuffer(body[:0])
 	binary.Read(buff, binary.LittleEndian, &m.BlockSize)
 	binary.Read(buff, binary.LittleEndian, &m.RecoverySetCount)
 
@@ -65,7 +65,7 @@ func (m *MainPacket) readBody(body []byte) {
 func (m *MainPacket) writeBody(dest []byte) []byte {
 	m.RecoverySetCount = uint32(len(m.RecoverySetFileIDs))
 
-	buff := bytes.NewBuffer(dest)
+	buff := bytes.NewBuffer(dest[:0])
 	binary.Write(buff, binary.LittleEndian, &m.BlockSize)
 	binary.Write(buff, binary.LittleEndian, &m.RecoverySetCount)
 
@@ -76,10 +76,6 @@ func (m *MainPacket) writeBody(dest []byte) []byte {
 		}
 	}
 	return buff.Bytes()
-}
-
-func (m *MainPacket) WriteTo(w io.Writer) (int64, error) {
-	return m.Header.writeTo(w, m.writeBody(nil))
 }
 
 // sortMD5s sorts by numerical value (treating them as 16-byte unsigned integers).
@@ -132,6 +128,13 @@ func (m *MainPacket) Add(r io.Reader, name string) (*FileDescPacket, error) {
 	}
 	fDesc.recalc()
 	m.RecoverySetFileIDs = append(m.RecoverySetFileIDs, fDesc.FileID)
-	m.recalc(m.writeBody(nil))
+	b := bytesPool.Get()
+	ho := m.Header
+	m.recalc(m.writeBody(b))
+	bytesPool.Put(b)
+	hn := m.Header
+	if ho == hn {
+		panic(errors.Errorf("Header didn't change: %#v", ho))
+	}
 	return fDesc, nil
 }

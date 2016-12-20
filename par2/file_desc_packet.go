@@ -44,7 +44,7 @@ func (f *FileDescPacket) packetHeader() Header {
 }
 
 func (f *FileDescPacket) readBody(body []byte) {
-	buff := bytes.NewBuffer(body)
+	buff := bytes.NewBuffer(body[:0])
 	copy(f.FileID[:], buff.Next(16))
 	copy(f.MD5[:], buff.Next(16))
 	copy(f.MiniMD5[:], buff.Next(16))
@@ -81,7 +81,7 @@ func writeString(w io.Writer, s string) (int, error) {
 func (f *FileDescPacket) writeBody(dest []byte) []byte {
 	f.recalc()
 
-	buff := bytes.NewBuffer(dest)
+	buff := bytes.NewBuffer(dest[:0])
 	buff.Write(f.FileID[:])
 	buff.Write(f.MD5[:])
 	buff.Write(f.MiniMD5[:])

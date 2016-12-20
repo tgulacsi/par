@@ -94,10 +94,6 @@ func (rw *rsPAR2Writer) writeShards(slices [][]byte, length int) error {
 
 		// parity shard
 		recov.RecoveryData = b
-		if n := len(b) % 4; n != 0 {
-			recov.RecoveryData = append(recov.RecoveryData, []byte{0, 0, 0}[:4-n]...)
-		}
-
 		if _, err := par2.WritePacket(rw.w, &recov); err != nil {
 			return err
 		}

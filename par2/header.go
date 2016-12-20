@@ -28,17 +28,30 @@ import (
 	"crypto/md5"
 	"encoding/binary"
 	"io"
+	"log"
 )
 
 const validSequence string = "PAR2\000PKT"
 
 type Header struct {
-	Sequence      [8]byte
-	Length        uint64
-	PacketMD5     MD5
+	// Sequence is a magic sequence. Used to quickly identify location of packets.
+	// Value = {'P', 'A', 'R', '2', '\0', 'P', 'K', 'T'} (ASCII)
+	Sequence [8]byte
+	// Length of the entire packet. Must be multiple of 4. (NB: Includes length of header.)
+	Length uint64
+	// PacketMD5 is the MD5 hash of packet. Used as a checksum for the packet.
+	// Calculation starts at first byte of Recovery Set ID and ends at last byte of body.
+	// Does not include the magic sequence, length field or this field.
+	// NB: The MD5 hash, by its definition, includes the length as if it were appended to the packet.
+	PacketMD5 MD5
+	// Recovery Set ID. All packets that belong together have the same recovery set ID.
+	// (See "main packet" for how it is calculated.)
 	RecoverySetID MD5
-	Type          [16]byte
-	Damaged       bool
+	// Type. Can be anything.
+	// All beginning "PAR " (ASCII) are reserved for specification-defined packets.
+	// Application-specific packets are recommended to begin with the ASCII name of the client.
+	Type    [16]byte
+	Damaged bool
 }
 
 func (h *Header) SetType(typ PacketType) { copy(h.Type[:], typ[:16]) }
@@ -50,6 +63,9 @@ func (h Header) readFrom(r io.Reader) error {
 	}
 
 	binary.Read(r, binary.LittleEndian, &h.Length)
+	if h.ValidSequence() {
+		log.Printf("length=%d", h.Length)
+	}
 	io.ReadFull(r, h.PacketMD5[:])
 	io.ReadFull(r, h.RecoverySetID[:])
 	_, err = io.ReadFull(r, h.Type[:])
@@ -60,7 +76,13 @@ func (h Header) ValidSequence() bool {
 	return bytes.Equal(h.Sequence[:], []byte(validSequence))
 }
 
-func (h Header) recalc(body []byte) {
+func (h *Header) recalc(body []byte) {
+	if n := len(body) % 4; n != 0 {
+		body = append(body, []byte{0, 0, 0}[:4-n]...)
+	}
+	h.Length = uint64(len(h.Sequence) + 8 +
+		len(h.PacketMD5) + len(h.RecoverySetID) +
+		len(h.Type) + len(body))
 	copy(h.Sequence[:], []byte(validSequence))
 	// MD5 Hash of packet. Used as a checksum for the packet.
 	// Calculation starts at first byte of Recovery Set ID and
@@ -73,12 +95,14 @@ func (h Header) recalc(body []byte) {
 	n += m
 	m, _ = hsh.Write(body)
 	n += m
-	h.Length = uint64(n)
-	binary.Write(hsh, binary.LittleEndian, h.Length)
+	binary.Write(hsh, binary.LittleEndian, n)
 	hsh.Sum(h.PacketMD5[:0])
 }
 
-func (h Header) writeTo(w io.Writer, body []byte) (int64, error) {
+func (h *Header) writeTo(w io.Writer, body []byte) (int64, error) {
+	if n := len(body) % 4; n != 0 {
+		body = append(body, []byte{0, 0, 0}[4-n:]...)
+	}
 	h.recalc(body)
 
 	{
@@ -88,6 +112,8 @@ func (h Header) writeTo(w io.Writer, body []byte) (int64, error) {
 		w.Write(h.PacketMD5[:])
 		w.Write(h.RecoverySetID[:])
 		w.Write(h.Type[:])
+		w.Write(body)
+
 		return w.N, w.Err
 	}
 }

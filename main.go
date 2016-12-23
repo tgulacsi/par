@@ -15,7 +15,7 @@ const (
 	VersionJSON = version(iota)
 	VersionPAR2
 
-	DefaultVersion      = VersionPAR2
+	DefaultVersion      = VersionJSON
 	DefaultShardSize    = 512 << 10
 	DefaultDataShards   = 10
 	DefaultParityShards = 3

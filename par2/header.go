@@ -81,9 +81,7 @@ func (h *Header) recalc(body []byte) {
 	if n := len(body) % 4; n != 0 {
 		body = append(body, []byte{0, 0, 0}[:4-n]...)
 	}
-	h.Length = uint64(len(h.Sequence) + 8 +
-		len(h.PacketMD5) + len(h.RecoverySetID) +
-		len(h.Type) + len(body))
+	h.Length = headerLength + uint64(len(body))
 	copy(h.Sequence[:], []byte(validSequence))
 	// MD5 Hash of packet. Used as a checksum for the packet.
 	// Calculation starts at first byte of Recovery Set ID and
@@ -91,12 +89,10 @@ func (h *Header) recalc(body []byte) {
 	// Does not include the magic sequence, length field or this field.
 	// NB: The MD5 Hash, by its definition, includes the length as if it were appended to the packet.
 	hsh := md5.New()
-	n, _ := hsh.Write(h.RecoverySetID[:])
-	m, _ := hsh.Write(h.Type[:])
-	n += m
-	m, _ = hsh.Write(body)
-	n += m
-	binary.Write(hsh, binary.LittleEndian, n)
+	hsh.Write(h.RecoverySetID[:])
+	hsh.Write(h.Type[:])
+	hsh.Write(body)
+	binary.Write(hsh, binary.LittleEndian, 16+16+len(body))
 	hsh.Sum(h.PacketMD5[:0])
 }
 

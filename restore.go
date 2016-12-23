@@ -144,8 +144,13 @@ func (rsw rsWriterTo) WriteTo(w io.Writer) (int64, error) {
 				}
 				return written, nil
 			}
+			b = bytes.TrimSpace(b)
+			if len(b) == 0 {
+				index--
+				break
+			}
 			if err := json.Unmarshal(b, &sm); err != nil {
-				return written, err
+				return written, errors.Wrap(err, string(b))
 			}
 			if sm.Index != index {
 				return written, errors.Errorf("Index mismatch: got %d, wanted %d.", sm.Index, index)

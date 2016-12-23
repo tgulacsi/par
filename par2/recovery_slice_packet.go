@@ -36,7 +36,7 @@ type RecoverySlicePacket struct {
 }
 
 func (r RecoverySlicePacket) String() string {
-	return fmt.Sprintf("Recovery slice of %s, exp=%d, data=%d", r.RecoverySetID, r.Exponent, len(r.RecoveryData))
+	return fmt.Sprintf("%s-RECOV-%s, %d/%d", r.PacketMD5, r.RecoverySetID, r.Exponent, len(r.RecoveryData))
 }
 
 func (r *RecoverySlicePacket) packetHeader() Header {

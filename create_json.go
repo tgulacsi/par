@@ -19,14 +19,10 @@ func NewRSJSONWriter(w io.Writer, meta FileMetadata) (*rsJSONWriter, error) {
 	jsw := rsJSONWriter{w: w}
 	jsw.rsEnc = meta.newRSEnc(jsw.writeShards)
 	jsw.meta = meta
-	if err := jsw.writeHeader(); err != nil {
+	if err := json.NewEncoder(w).Encode(meta); err != nil {
 		return nil, err
 	}
 	return &jsw, nil
-}
-
-func (rw *rsJSONWriter) writeHeader() error {
-	return json.NewEncoder(rw.w).Encode(rw.meta)
 }
 
 func (rw *rsJSONWriter) Close() error {

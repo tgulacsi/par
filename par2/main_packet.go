@@ -48,16 +48,18 @@ func (m *MainPacket) packetHeader() Header {
 }
 
 func (m *MainPacket) readBody(body []byte) {
-	buff := bytes.NewBuffer(body[:0])
-	binary.Read(buff, binary.LittleEndian, &m.BlockSize)
-	binary.Read(buff, binary.LittleEndian, &m.RecoverySetCount)
+	m.BlockSize = binary.LittleEndian.Uint64(body)
+	body = body[8:]
+	m.RecoverySetCount = binary.LittleEndian.Uint32(body)
+	body = body[4:]
 
+	nonRecCount := (len(body) >> 4) - int(m.RecoverySetCount)
 	m.RecoverySetFileIDs = make([]MD5, m.RecoverySetCount)
-	nonRecCount := buff.Len() / 16
 	m.NonRecoverySetFileIDs = make([]MD5, nonRecCount)
 	for _, arr := range [][]MD5{m.RecoverySetFileIDs, m.NonRecoverySetFileIDs} {
 		for i := range arr {
-			copy(arr[i][:], buff.Next(16))
+			copy(arr[i][:], body)
+			body = body[16:]
 		}
 	}
 }

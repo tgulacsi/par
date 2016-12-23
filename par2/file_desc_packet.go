@@ -44,12 +44,15 @@ func (f *FileDescPacket) packetHeader() Header {
 }
 
 func (f *FileDescPacket) readBody(body []byte) {
-	buff := bytes.NewBuffer(body[:0])
-	copy(f.FileID[:], buff.Next(16))
-	copy(f.MD5[:], buff.Next(16))
-	copy(f.MiniMD5[:], buff.Next(16))
-	binary.Read(buff, binary.LittleEndian, &f.FileLength)
-	f.FileName = string(bytes.TrimRight(buff.Next(buff.Len()), "\000"))
+	copy(f.FileID[:], body)
+	body = body[16:]
+	copy(f.MD5[:], body)
+	body = body[16:]
+	copy(f.MiniMD5[:], body)
+	body = body[16:]
+	f.FileLength = binary.LittleEndian.Uint64(body)
+	body = body[8:]
+	f.FileName = string(bytes.TrimRight(body, "\000"))
 }
 
 func (f *FileDescPacket) recalc() {

@@ -37,7 +37,7 @@ func RestoreParFile(w io.Writer, parFn, fileName string, D, P, shardSize int) er
 	if ver == VersionPAR2 {
 		info := par2.ParInfo{ParFiles: []string{parFn}}
 		err := info.Parse()
-		log.Printf("info=%#v err=%+v", info, err)
+		log.Printf("info=%q err=%+v", info, err)
 		if err == nil && info.Main == nil {
 			err = errors.New("empty par file: " + parFn)
 		}

@@ -26,6 +26,7 @@ package par2
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 )
 
 type RecoverySlicePacket struct {
@@ -34,15 +35,17 @@ type RecoverySlicePacket struct {
 	RecoveryData []byte
 }
 
+func (r RecoverySlicePacket) String() string {
+	return fmt.Sprintf("Recovery slice of %s, exp=%d, data=%d", r.RecoverySetID, r.Exponent, len(r.RecoveryData))
+}
+
 func (r *RecoverySlicePacket) packetHeader() Header {
 	return r.Header
 }
 
 func (r *RecoverySlicePacket) readBody(body []byte) {
-	buff := bytes.NewBuffer(body[:0])
-	binary.Read(buff, binary.LittleEndian, &r.Exponent)
-
-	r.RecoveryData = buff.Next(int(r.Header.Length) - 4)
+	binary.Read(bytes.NewReader(body), binary.LittleEndian, &r.Exponent)
+	r.RecoveryData = body[4:]
 }
 
 func (r *RecoverySlicePacket) AvailableBlocks(blocksize uint64) uint64 {

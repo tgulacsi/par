@@ -29,6 +29,8 @@ package par2
 import (
 	"bytes"
 	"crypto/md5"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -69,7 +71,12 @@ type ParInfo struct {
 }
 
 type MD5 [16]byte
+
+func (m MD5) String() string { return base64.URLEncoding.EncodeToString(m[:]) }
+
 type CRC32 [4]byte
+
+func (m CRC32) String() string { return base64.URLEncoding.EncodeToString(m[:]) }
 
 func Stat(file string) (*ParInfo, error) {
 	parFiles, err := allParFiles(file)
@@ -240,9 +247,10 @@ func readPackets(packets []Packet, files []string) ([]Packet, error) {
 			h.verifyPacket(buf)
 			p.readBody(buf)
 
-			if !h.Damaged && !contains(packets, p) {
-				packets = append(packets, p)
+			if h.Damaged || contains(packets, p) {
+				continue
 			}
+			packets = append(packets, p)
 		}
 		f.Close()
 	}
@@ -265,7 +273,11 @@ func contains(packets []Packet, packet Packet) bool {
 func (h Header) Create() Packet {
 	switch PacketType(h.Type[:]) {
 	case TypeMainPacket:
-		return &MainPacket{Header: h}
+		m := MainPacket{Header: h}
+		if _, err := rand.Read(m.RecoverySetID[:]); err != nil {
+			panic(err)
+		}
+		return &m
 	case TypeFileDescPacket:
 		return &FileDescPacket{Header: h}
 	case TypeIFSCPacket:

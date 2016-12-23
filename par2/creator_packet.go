@@ -23,11 +23,18 @@
 
 package par2
 
-import "bytes"
+import (
+	"bytes"
+	"fmt"
+)
 
 type CreatorPacket struct {
 	Header
 	Creator string
+}
+
+func (c CreatorPacket) String() string {
+	return fmt.Sprintf("Creator:%q", c.Creator)
 }
 
 func (c *CreatorPacket) packetHeader() Header {

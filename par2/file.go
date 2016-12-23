@@ -23,15 +23,13 @@
 
 package par2
 
-import "fmt"
-
 type File struct {
 	*FileDescPacket
 	*IFSCPacket
 }
 
 func (f *File) ID() string {
-	return fmt.Sprintf("%x", f.FileDescPacket.FileID)
+	return f.FileDescPacket.FileID.String()
 }
 
 func (f *File) Valid() bool {

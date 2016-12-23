@@ -27,8 +27,8 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/binary"
+	"fmt"
 	"io"
-	"log"
 )
 
 const validSequence string = "PAR2\000PKT"
@@ -54,21 +54,22 @@ type Header struct {
 	Damaged bool
 }
 
+func (h Header) String() string {
+	return fmt.Sprintf("%d:%s [%s] of [%s]", h.Length, h.Type[:], h.PacketMD5, h.RecoverySetID)
+}
+
 func (h *Header) SetType(typ PacketType) { copy(h.Type[:], typ[:16]) }
 
-func (h Header) readFrom(r io.Reader) error {
+func (h *Header) readFrom(r io.Reader) error {
 	_, err := io.ReadFull(r, h.Sequence[:])
 	if err != nil {
 		return err
 	}
 
 	binary.Read(r, binary.LittleEndian, &h.Length)
-	if h.ValidSequence() {
-		log.Printf("length=%d", h.Length)
-	}
 	io.ReadFull(r, h.PacketMD5[:])
 	io.ReadFull(r, h.RecoverySetID[:])
-	_, err = io.ReadFull(r, h.Type[:])
+	io.ReadFull(r, h.Type[:])
 	return err
 }
 

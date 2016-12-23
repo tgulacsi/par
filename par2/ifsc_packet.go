@@ -41,15 +41,17 @@ func (i *IFSCPacket) packetHeader() Header {
 }
 
 func (i *IFSCPacket) readBody(body []byte) {
-	buff := bytes.NewBuffer(body[:0])
-	copy(i.FileID[:], buff.Next(16))
+	copy(i.FileID[:], body)
+	body = body[16:]
 
-	pairCount := buff.Len() / 20
+	pairCount := len(body) / 20
 	i.Pairs = make([]ChecksumPair, 0, pairCount)
 	for n := 0; n < pairCount; n++ {
 		var pair ChecksumPair
-		copy(pair.MD5[:], buff.Next(16))
-		copy(pair.CRC32[:], buff.Next(4))
+		copy(pair.MD5[:], body)
+		body = body[16:]
+		copy(pair.CRC32[:], body)
+		body = body[4:]
 		i.Pairs = append(i.Pairs, pair)
 	}
 }

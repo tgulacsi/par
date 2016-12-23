@@ -19,9 +19,11 @@ type rsPAR2Writer struct {
 	rsEnc
 	w      io.Writer
 	meta   FileMetadata
-	Header par2.Header
 	FileID par2.MD5
+	Header par2.Header
 	ifsc   *par2.IFSCPacket
+	// raidPkts contains the packets to be repeated
+	raidPkts []par2.Packet
 }
 
 func NewPAR2Writer(w io.Writer, meta FileMetadata) (*rsPAR2Writer, error) {
@@ -32,21 +34,23 @@ func NewPAR2Writer(w io.Writer, meta FileMetadata) (*rsPAR2Writer, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, meta.FileName)
 	}
+
 	mainPkt := par2.CreatePacket(par2.TypeMainPacket).(*par2.MainPacket)
 	fDescPkt, err := mainPkt.Add(fh, meta.FileName)
 	fh.Close()
 	if err != nil {
 		return nil, err
 	}
-	prw.Header = mainPkt.Header
 	prw.FileID = fDescPkt.FileID
 
+	prw.Header = mainPkt.Header
+	prw.raidPkts = []par2.Packet{mainPkt, fDescPkt}
+
 	crPkt := par2.CreatePacket(par2.TypeCreatorPacket).(*par2.CreatorPacket)
+	crPkt.RecoverySetID = mainPkt.RecoverySetID
 	crPkt.Creator = Creator
-	for _, p := range []par2.Packet{crPkt, mainPkt, fDescPkt} {
-		if _, err := par2.WritePacket(w, p); err != nil {
-			return nil, err
-		}
+	if err := writePackets(w, append(prw.raidPkts, crPkt, mainPkt, fDescPkt)); err != nil {
+		return nil, err
 	}
 	return &prw, nil
 }
@@ -56,8 +60,8 @@ func (rw *rsPAR2Writer) Close() error {
 	if err != nil {
 		return err
 	}
-	_, err = par2.WritePacket(rw.w, rw.ifsc)
-	return err
+	return writePackets(rw.w,
+		append(append([]par2.Packet{rw.ifsc}, rw.raidPkts...), rw.ifsc))
 }
 
 func (rw *rsPAR2Writer) writeShards(slices [][]byte, length int) error {
@@ -94,7 +98,16 @@ func (rw *rsPAR2Writer) writeShards(slices [][]byte, length int) error {
 
 		// parity shard
 		recov.RecoveryData = b
-		if _, err := par2.WritePacket(rw.w, &recov); err != nil {
+		if err := writePackets(rw.w, append(rw.raidPkts, &recov)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writePackets(w io.Writer, packets []par2.Packet) error {
+	for _, p := range packets {
+		if _, err := par2.WritePacket(w, p); err != nil {
 			return err
 		}
 	}

@@ -1,18 +1,22 @@
 package main
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"hash/crc32"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
 	"os"
 
+	"github.com/klauspost/reedsolomon"
 	"github.com/pkg/errors"
 	"github.com/tgulacsi/par/par2"
 )
+
+var errShardBroken = errors.New("shard is broken")
 
 func RestoreParFile(w io.Writer, parFn, fileName string, D, P, shardSize int) error {
 	pfh, err := os.Open(parFn)
@@ -21,17 +25,20 @@ func RestoreParFile(w io.Writer, parFn, fileName string, D, P, shardSize int) er
 	}
 	defer pfh.Close()
 	br := bufio.NewReader(pfh)
-	b, err := br.Peek(5)
+	// u s t a r \0 0 0  at byte offset 257
+	b, err := br.Peek(257 + 6)
 	if err != nil {
 		return errors.Wrap(err, parFn)
 	}
-	ver := VersionPAR2
-	if !bytes.Equal(b, []byte("PAR2\000")) {
-		if b[0] == '{' {
-			ver = VersionJSON
-		} else {
-			return errors.Errorf("unknown parity file start %q", b)
-		}
+	ver := VersionTAR
+	if bytes.Equal(b, []byte("PAR2\000")) {
+		ver = VersionPAR2
+	} else if b[0] == '{' {
+		ver = VersionJSON
+	} else if len(b) >= 257 && bytes.Equal(b[257:257+6], []byte("ustar\000")) {
+		ver = VersionTAR
+	} else {
+		return errors.Errorf("unknown parity file start %q", b)
 	}
 
 	if ver == VersionPAR2 {
@@ -59,6 +66,18 @@ func RestoreParFile(w io.Writer, parFn, fileName string, D, P, shardSize int) er
 func (ver version) NewParWriterTo(parity, data io.Reader, D, P, shardSize int) (io.WriterTo, error) {
 	var meta FileMetadata
 	switch ver {
+	case VersionTAR:
+		tr := tar.NewReader(parity)
+		th, err := tr.Next()
+		if err != nil {
+			return nil, err
+		}
+		if th.Name != "FileMetadata.json" {
+			return nil, errors.Errorf("First item should be FileMetadata.json, got %q", th.Name)
+		}
+		meta.Version = VersionTAR
+		return meta.NewWriterTo(tr, data), nil
+
 	case VersionJSON:
 		dec := json.NewDecoder(parity)
 		if err := dec.Decode(&meta); err != nil {
@@ -70,6 +89,7 @@ func (ver version) NewParWriterTo(parity, data io.Reader, D, P, shardSize int) (
 	case VersionPAR2:
 		meta.Version = VersionPAR2
 		return meta.NewWriterTo(parity, data), nil
+
 	}
 	return nil, errors.Errorf("unknown version %s", ver)
 }
@@ -104,108 +124,130 @@ func (meta *FileMetadata) NewWriterTo(parity, data io.Reader) io.WriterTo {
 		meta.ShardSize += 4 - n
 	}
 
-	rsw := rsWriterTo{
-		meta:   *meta,
-		parity: bufio.NewReader(parity),
-		data:   data,
+	rsw := rsWriterTo{meta: meta}
+
+	var nextShard func([]byte, int) (ShardMetadata, []byte, error)
+	switch meta.Version {
+	case VersionJSON:
+		nextShard = newJSONNextShard(*meta, bufio.NewReader(parity), data)
+
+	case VersionTAR:
+		nextShard = newTarNextShard(*meta, parity.(*tar.Reader), data)
+
+	case VersionPAR2:
+		panic("PAR2 decoding is not implemented")
+
+	default:
+		panic(fmt.Sprintf("Unknown version %v", meta.Version))
 	}
-	rsw.rsEnc = meta.newRSEnc(rsw.writeShards)
+
+	rsw.rsDec = meta.newRSDec(nextShard)
 	return &rsw
+}
+
+func (meta *FileMetadata) newRSDec(nextShard func([]byte, int) (ShardMetadata, []byte, error)) rsDec {
+	if meta.DataShards == 0 {
+		meta.DataShards = DefaultDataShards
+	}
+	if meta.ParityShards == 0 {
+		meta.ParityShards = DefaultParityShards
+	}
+	if meta.ShardSize == 0 {
+		meta.ShardSize = DefaultShardSize
+	}
+	if n := meta.ShardSize % 4; n != 0 {
+		n += 4 - n
+	}
+	D, P := int(meta.DataShards), int(meta.ParityShards)
+	shardSize := int(meta.ShardSize)
+	rse := rsDec{
+		data:       make([]byte, (D+P)*shardSize),
+		slices:     make([][]byte, D+P),
+		DataShards: D, ShardSize: shardSize,
+		nextShard: nextShard,
+	}
+	var err error
+	if rse.Encoder, err = reedsolomon.New(D, P); err != nil {
+		panic(errors.Wrapf(err, "D=%d P=%d", D, P))
+	}
+	for i := range rse.slices {
+		rse.slices[i] = rse.data[i*shardSize : (i+1)*shardSize]
+	}
+	return rse
 }
 
 var _ = io.WriterTo(rsWriterTo{})
 
 type rsWriterTo struct {
-	rsEnc
-	parity *bufio.Reader
-	data   io.Reader
-	meta   FileMetadata
+	meta *FileMetadata
+	rsDec
+}
+
+type rsDec struct {
+	reedsolomon.Encoder
+	data                  []byte
+	slices                [][]byte
+	DataShards, ShardSize int
+	nextShard             func([]byte, int) (ShardMetadata, []byte, error)
 }
 
 func (rsw rsWriterTo) WriteTo(w io.Writer) (int64, error) {
 	D, P := int(rsw.meta.DataShards), int(rsw.meta.ParityShards)
-	if (rsw.data == nil || rsw.parity == rsw.data) && rsw.meta.OnlyParity {
-		return 0, errors.New("OnlyPar needs separate data file")
-	}
-
 	slices := make([][]byte, len(rsw.slices))
-	var index uint32
-	var written int64
+	var (
+		index   uint32
+		written int64
+		sm      ShardMetadata
+		err     error
+	)
 	for {
 		copy(slices, rsw.slices)
 		var missing, totalSize int
 		for i := 0; i < D+P; i++ {
+			p := slices[i]
+			p = p[:cap(p)]
 			index++
-			var sm ShardMetadata
-			b, err := rsw.parity.ReadBytes('\n')
+			sm, p, err = rsw.nextShard(p, i)
 			if err != nil {
-				if err == io.EOF && len(b) == 0 {
+				if err == io.EOF {
 					return written, nil
 				}
-				return written, nil
+				if errors.Cause(err) == errShardBroken {
+					slices[i] = nil
+					missing++
+					continue
+				}
+				return written, err
 			}
-			b = bytes.TrimSpace(b)
-			if len(b) == 0 {
-				index--
-				break
-			}
-			if err := json.Unmarshal(b, &sm); err != nil {
-				return written, errors.Wrap(err, string(b))
-			}
+
 			if sm.Index != index {
 				return written, errors.Errorf("Index mismatch: got %d, wanted %d.", sm.Index, index)
 			}
-			if sm.Size == 0 {
-				zero(slices[i])
+			length := int(sm.Size)
+			if length == 0 {
+				zero(p[:cap(p)])
 				continue
 			}
-			r := io.Reader(rsw.parity)
-			if rsw.meta.OnlyParity && i < D {
-				r = rsw.data
-			}
-			hsh := crc32.New(crc32cTable)
-			length := int(sm.Size)
-			n, err := io.ReadFull(io.TeeReader(r, hsh), slices[i][:length])
 			if i < D {
 				totalSize += length
 			}
-			if err == nil {
-				if length < len(slices[i]) {
-					zero(slices[i][length:])
-					hsh.Write(slices[i][length:])
-				}
-				got := uint32(hsh.Sum32())
-				if sm.Hash32 != got {
-					log.Printf("%d. shard crc mismatch (got %d, wanted %d)!", i, got, sm.Hash32)
-					slices[i] = nil
-					missing++
-				}
-				continue
-			}
-			if sek, ok := r.(io.Seeker); ok {
-				if _, seekErr := sek.Seek(int64(len(slices[i])-n), io.SeekCurrent); seekErr != nil {
-					return written, errors.Wrapf(err, "seek: %v", seekErr)
-				}
-				slices[i] = nil // missing slice!
-				missing++
-			}
-
+			zero(p[length:cap(p)])
 		}
 
 		if missing > 0 {
 			log.Printf("Has %d missing shards, try to reconstruct...", missing)
-			if err := rsw.enc.Reconstruct(slices); err != nil {
+			if err := rsw.rsDec.Reconstruct(slices); err != nil {
 				return written, errors.Wrap(err, "Reconstruct")
 			}
 		}
-		if ok, err := rsw.enc.Verify(slices); !ok || err != nil {
+		if ok, err := rsw.rsDec.Verify(slices); !ok || err != nil {
 			if err == nil {
 				err = errors.New("Verify failed")
 			}
 			return written, errors.Wrap(err, "Verify")
 		}
 
-		if _, err := w.Write(rsw.rsEnc.data[:totalSize]); err != nil {
+		if _, err := w.Write(rsw.rsDec.data[:totalSize]); err != nil {
 			return written, err
 		}
 	}

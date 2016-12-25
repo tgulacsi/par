@@ -67,6 +67,8 @@ func (meta FileMetadata) NewWriter(w io.Writer) (io.WriteCloser, error) {
 		rw, err = NewRSJSONWriter(w, meta)
 	case VersionPAR2:
 		rw, err = NewPAR2Writer(w, meta)
+	case VersionTAR:
+		rw, err = NewRSTarWriter(w, meta)
 	default:
 		err = errors.Wrapf(ErrUnknownVersion, "%s", meta.Version)
 	}

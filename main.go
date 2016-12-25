@@ -14,8 +14,9 @@ import (
 const (
 	VersionJSON = version(iota)
 	VersionPAR2
+	VersionTAR
 
-	DefaultVersion      = VersionJSON
+	DefaultVersion      = VersionTAR
 	DefaultShardSize    = 512 << 10
 	DefaultDataShards   = 10
 	DefaultParityShards = 3

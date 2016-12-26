@@ -1,3 +1,18 @@
+// Copyright 2016 Tamás Gulácsi
+//
+//
+//    Licensed under the Apache License, Version 2.0 (the "License");
+//    you may not use this file except in compliance with the License.
+//    You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//    Unless required by applicable law or agreed to in writing, software
+//    distributed under the License is distributed on an "AS IS" BASIS,
+//    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//    See the License for the specific language governing permissions and
+//    limitations under the License.
+
 package main
 
 import (
@@ -6,7 +21,6 @@ import (
 	"encoding/json"
 	"hash/crc32"
 	"io"
-	"log"
 	"os"
 	"time"
 
@@ -40,7 +54,6 @@ var (
 )
 
 func (rw *rsTarWriter) add(name string, data []byte) error {
-	log.Println(name)
 	if err := rw.w.WriteHeader(&tar.Header{
 		Name: name,
 		Mode: 0444, Uid: uid, Gid: gid, Size: int64(len(data)),
@@ -80,6 +93,7 @@ func (rw *rsTarWriter) writeShards(slices [][]byte, length int) error {
 			}
 			length -= n
 		}
+		b = b[:n]
 
 		hsh := crc32.New(crc32cTable)
 		hsh.Write(b[:n])
@@ -97,8 +111,6 @@ func (rw *rsTarWriter) writeShards(slices [][]byte, length int) error {
 		}
 		fn := string(append(bytes.TrimSpace(buf.Bytes()), []byte(".dat")...))
 		if isDataShard && rw.meta.OnlyParity {
-			b = b[:n]
-		} else {
 			b = nil
 		}
 		if err := rw.add(fn, b); err != nil {

@@ -123,7 +123,6 @@ func (meta *FileMetadata) newRSEnc(writeShards func([][]byte, int) error) rsEnc 
 }
 
 func (rse *rsEnc) Write(p []byte) (int, error) {
-	log.Printf("Write(%d)", len(p))
 	if len(p) == 0 {
 		return 0, nil
 	}

@@ -33,7 +33,7 @@ import (
 
 var errShardBroken = errors.New("shard is broken")
 
-func RestoreParFile(w io.Writer, parFn, fileName string, D, P, shardSize int) error {
+func RestoreParFile(w io.Writer, parFn, fileName string) error {
 	pfh, err := os.Open(parFn)
 	if err != nil {
 		return errors.Wrap(err, parFn)
@@ -70,7 +70,7 @@ func RestoreParFile(w io.Writer, parFn, fileName string, D, P, shardSize int) er
 	if err != nil {
 		return errors.Wrap(err, fileName)
 	}
-	wr, err := ver.NewParWriterTo(br, r, D, P, shardSize)
+	wr, err := ver.NewParWriterTo(br, r)
 	if err != nil {
 		return err
 	}
@@ -79,7 +79,7 @@ func RestoreParFile(w io.Writer, parFn, fileName string, D, P, shardSize int) er
 	return err
 }
 
-func (ver version) NewParWriterTo(parity, data io.Reader, D, P, shardSize int) (io.WriterTo, error) {
+func (ver version) NewParWriterTo(parity, data io.Reader) (io.WriterTo, error) {
 	var meta FileMetadata
 	switch ver {
 	case VersionTAR:
@@ -99,10 +99,10 @@ func (ver version) NewParWriterTo(parity, data io.Reader, D, P, shardSize int) (
 		return meta.NewWriterTo(tr, data), nil
 
 	case VersionJSON:
-		dec := json.NewDecoder(parity)
+		var buf bytes.Buffer
+		dec := json.NewDecoder(io.TeeReader(parity, &buf))
 		if err := dec.Decode(&meta); err != nil {
-			log.Printf("Read metadata: %v", err)
-			meta.DataShards, meta.ParityShards, meta.ShardSize = uint8(D), uint8(P), uint32(shardSize)
+			return nil, errors.Wrapf(err, "read metadata %s", buf.Bytes())
 		}
 		meta.Version = VersionJSON
 		return meta.NewWriterTo(rewind(dec.Buffered(), parity), data), nil

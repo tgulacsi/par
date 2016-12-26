@@ -67,16 +67,12 @@ func main() {
 		todo, os.Args[1] = os.Args[1], os.Args[0]
 		os.Args = os.Args[1:]
 	}
-	var dataShards, parityShards, shardSize int
+	var redundancy, shardSize int
 	createFlags := flag.NewFlagSet("create", flag.ExitOnError)
-	createFlags.IntVar(&dataShards, "d", DefaultDataShards, "data shards")
-	createFlags.IntVar(&parityShards, "p", DefaultParityShards, "parity shards")
+	createFlags.IntVar(&redundancy, "r", 30, "data shards")
 	createFlags.IntVar(&shardSize, "s", DefaultShardSize, "shard size")
 
 	restoreFlags := flag.NewFlagSet("restore", flag.ExitOnError)
-	restoreFlags.IntVar(&dataShards, "d", 0, "data shards")
-	restoreFlags.IntVar(&parityShards, "p", 0, "parity shards")
-	restoreFlags.IntVar(&shardSize, "s", 0, "shard size")
 	flagOut := restoreFlags.String("o", "-", "output")
 
 	var flagSet *flag.FlagSet
@@ -107,6 +103,12 @@ Restore the file from the parity:
 		if len(flagSet.Args()) > 1 {
 			out = flagSet.Arg(1)
 		}
+		var dataShards, parityShards int
+		if redundancy%10 == 0 {
+			dataShards, parityShards = 10, redundancy/10
+		} else {
+			dataShards, parityShards = 100, redundancy
+		}
 		if err := CreateParFile(out, inp, dataShards, parityShards, shardSize); err != nil {
 			log.Fatal(err)
 		}
@@ -125,7 +127,7 @@ Restore the file from the parity:
 		}
 		defer w.Close()
 	}
-	if err := RestoreParFile(w, parFn, fileName, dataShards, parityShards, shardSize); err != nil {
+	if err := RestoreParFile(w, parFn, fileName); err != nil {
 		log.Fatal(err)
 	}
 	if err := w.Close(); err != nil {

@@ -64,7 +64,7 @@ func TestCR(t *testing.T) {
 	}
 
 	var restored bytes.Buffer
-	if err := RestoreParFile(&restored, parity.Name(), inp.Name(), 0, 0, 0); err != nil {
+	if err := RestoreParFile(&restored, parity.Name(), inp.Name()); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
 

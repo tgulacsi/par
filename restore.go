@@ -91,6 +91,10 @@ func (ver version) NewParWriterTo(parity, data io.Reader, D, P, shardSize int) (
 		if th.Name != "FileMetadata.json" {
 			return nil, errors.Errorf("First item should be FileMetadata.json, got %q", th.Name)
 		}
+		var buf bytes.Buffer
+		if err = json.NewDecoder(io.TeeReader(tr, &buf)).Decode(&meta); err != nil {
+			return nil, errors.Wrap(err, buf.String())
+		}
 		meta.Version = VersionTAR
 		return meta.NewWriterTo(tr, data), nil
 
@@ -255,12 +259,12 @@ func (rsw rsWriterTo) WriteTo(w io.Writer) (int64, error) {
 			if err := rsw.rsDec.Reconstruct(slices); err != nil {
 				return written, errors.Wrap(err, "Reconstruct")
 			}
+			totalSize += int(sm.Size)
 		}
-		if ok, err := rsw.rsDec.Verify(slices); !ok || err != nil {
-			if err == nil {
-				err = errors.New("Verify failed")
-			}
+		if ok, err := rsw.rsDec.Verify(slices); err != nil {
 			return written, errors.Wrap(err, "Verify")
+		} else if !ok {
+			return written, errors.New("Verify failed")
 		}
 
 		n, err := w.Write(rsw.rsDec.data[:totalSize])

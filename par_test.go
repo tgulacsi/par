@@ -17,7 +17,9 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"io/ioutil"
+	"log"
 	"os"
 	"testing"
 
@@ -31,25 +33,52 @@ func TestCR(t *testing.T) {
 	}
 	defer inp.Close()
 
-	fh, err := ioutil.TempFile("", "par-")
-	defer os.Remove(fh.Name())
-	defer fh.Close()
+	parity, err := ioutil.TempFile("", "par-")
+	defer remove(parity.Name())
+	defer parity.Close()
 
-	if err := CreateParFile(fh.Name(), inp.Name(), 0, 0, 0); err != nil {
+	if err := CreateParFile(parity.Name(), inp.Name(), 0, 0, 0); err != nil {
 		t.Fatalf("create: %+v", err)
 	}
-
-	var restored bytes.Buffer
-	if err := RestoreParFile(&restored, fh.Name(), inp.Name(), 0, 0, 0); err != nil {
-		t.Fatalf("Restore: %v", err)
+	if _, err := inp.Seek(0, io.SeekStart); err != nil {
+		t.Fatalf("rewind %q: %v", inp.Name(), err)
 	}
 
 	orig, err := ioutil.ReadAll(inp)
 	if err != nil {
 		t.Fatalf("read %q: %v", inp.Name(), err)
 	}
+	changed, err := ioutil.TempFile("", "par-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remove(changed.Name())
+	n := len(orig) / 2
+	changed.Write(orig[:n])
+	changed.Write([]byte{orig[n] + 1})
+	if _, err := changed.Write(orig[n+1:]); err != nil {
+		t.Fatalf("write changed file %q: %v", changed.Name(), err)
+	}
+	if err := changed.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var restored bytes.Buffer
+	if err := RestoreParFile(&restored, parity.Name(), inp.Name(), 0, 0, 0); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
 
 	if d := diff.Diff(string(orig), restored.String()); d != "" {
 		t.Error(d)
 	}
+}
+
+var KeepFiles = os.Getenv("KEEP_FILES") == "1"
+
+func remove(fn string) error {
+	if KeepFiles {
+		log.Println("KEEP", fn)
+		return nil
+	}
+	return os.Remove(fn)
 }

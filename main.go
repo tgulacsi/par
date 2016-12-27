@@ -68,9 +68,11 @@ func main() {
 		os.Args = os.Args[1:]
 	}
 	var redundancy, shardSize int
+	var verS string
 	createFlags := flag.NewFlagSet("create", flag.ExitOnError)
 	createFlags.IntVar(&redundancy, "r", 30, "data shards")
 	createFlags.IntVar(&shardSize, "s", DefaultShardSize, "shard size")
+	createFlags.StringVar(&verS, "version", "tar", "version to create (tar|json|par2)")
 
 	restoreFlags := flag.NewFlagSet("restore", flag.ExitOnError)
 	flagOut := restoreFlags.String("o", "-", "output")
@@ -103,13 +105,25 @@ Restore the file from the parity:
 		if len(flagSet.Args()) > 1 {
 			out = flagSet.Arg(1)
 		}
+		ver := VersionTAR
+		switch verS {
+		case "json":
+			ver = VersionJSON
+		case "par", "par2":
+			ver = VersionPAR2
+		case "tar":
+			ver = VersionTAR
+		default:
+			fmt.Fprintf(os.Stderr, "Unknown version %q. Known versions: json, tar, par2.")
+			os.Exit(1)
+		}
 		var dataShards, parityShards int
 		if redundancy%10 == 0 {
 			dataShards, parityShards = 10, redundancy/10
 		} else {
 			dataShards, parityShards = 100, redundancy
 		}
-		if err := CreateParFile(out, inp, dataShards, parityShards, shardSize); err != nil {
+		if err := ver.CreateParFile(out, inp, dataShards, parityShards, shardSize); err != nil {
 			log.Fatal(err)
 		}
 		return

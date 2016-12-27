@@ -25,7 +25,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-func CreateParFile(out, inp string, D, P, shardSize int) error {
+func (ver version) CreateParFile(out, inp string, D, P, shardSize int) error {
 	log.Printf("Create %q for %q.", out, inp)
 	if out == inp {
 		return errors.New("inp must be differ from out!")
@@ -49,7 +49,7 @@ func CreateParFile(out, inp string, D, P, shardSize int) error {
 		ShardSize:  uint32(shardSize),
 		FileName:   filepath.Base(fh.Name()),
 		OnlyParity: true,
-		Version:    DefaultVersion,
+		Version:    ver,
 	}.NewWriter(pfh)
 	if err != nil {
 		return err

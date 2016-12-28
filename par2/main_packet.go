@@ -71,8 +71,8 @@ func (m *MainPacket) writeBody(dest []byte) []byte {
 	binary.Write(buff, binary.LittleEndian, &m.BlockSize)
 	binary.Write(buff, binary.LittleEndian, &m.RecoverySetCount)
 
+	m.recalcIDs()
 	for _, arr := range [][]MD5{m.RecoverySetFileIDs, m.NonRecoverySetFileIDs} {
-		sortMD5s(arr)
 		for _, fid := range arr {
 			buff.Write(fid[:])
 		}
@@ -80,8 +80,27 @@ func (m *MainPacket) writeBody(dest []byte) []byte {
 	return buff.Bytes()
 }
 
+func (m *MainPacket) recalcIDs() {
+	// Compute the SetID
+	hsh := md5.New()
+	for _, arr := range [][]MD5{m.RecoverySetFileIDs, m.NonRecoverySetFileIDs} {
+		if len(arr) > 1 {
+			sortMD5s(arr)
+		}
+		for _, fid := range arr {
+			hsh.Write(fid[:])
+		}
+	}
+	hsh.Sum(m.Header.RecoverySetID[:0])
+
+	// FIXME(tgulacsi): this is not finished, and probably wrong!
+}
+
 // sortMD5s sorts by numerical value (treating them as 16-byte unsigned integers).
 func sortMD5s(p []MD5) {
+	if len(p) < 2 {
+		return
+	}
 	sort.Slice(p, func(i, j int) bool {
 		var a, b MD5
 		// reverse from Little-Endian to Big-Endian

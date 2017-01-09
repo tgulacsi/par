@@ -32,7 +32,7 @@ import (
 type RecoverySlicePacket struct {
 	Header
 	Exponent     uint32
-	RecoveryData []byte
+	RecoveryData []byte `json:"-"`
 }
 
 func (r RecoverySlicePacket) String() string {

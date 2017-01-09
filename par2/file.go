@@ -23,6 +23,8 @@
 
 package par2
 
+import "fmt"
+
 type File struct {
 	*FileDescPacket
 	*IFSCPacket
@@ -34,4 +36,8 @@ func (f *File) ID() string {
 
 func (f *File) Valid() bool {
 	return f.FileDescPacket != nil && f.IFSCPacket != nil
+}
+
+func (f File) String() string {
+	return fmt.Sprintf("%s\n%s", f.FileDescPacket, f.IFSCPacket)
 }

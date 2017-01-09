@@ -73,10 +73,22 @@ type ParInfo struct {
 type MD5 [16]byte
 
 func (m MD5) String() string { return base64.URLEncoding.EncodeToString(m[:]) }
+func (m MD5) MarshalText() ([]byte, error) {
+	var a [24]byte
+	base64.URLEncoding.Encode(a[:], m[:])
+	return a[:], nil
+}
+func (m MD5) MarshalBinary() ([]byte, error) { return m[:], nil }
 
 type CRC32 [4]byte
 
 func (m CRC32) String() string { return base64.URLEncoding.EncodeToString(m[:]) }
+func (m CRC32) MarshalText() ([]byte, error) {
+	var a [8]byte
+	base64.URLEncoding.Encode(a[:], m[:])
+	return a[:], nil
+}
+func (m CRC32) MarshalBinary() ([]byte, error) { return m[:], nil }
 
 func Stat(file string) (*ParInfo, error) {
 	parFiles, err := allParFiles(file)

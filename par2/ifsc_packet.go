@@ -23,12 +23,19 @@
 
 package par2
 
-import "bytes"
+import (
+	"bytes"
+	"fmt"
+)
 
 type IFSCPacket struct {
 	Header
 	FileID MD5
 	Pairs  []ChecksumPair
+}
+
+func (i IFSCPacket) String() string {
+	return fmt.Sprintf("[%s] #pairs=%d", i.FileID, len(i.Pairs))
 }
 
 type ChecksumPair struct {

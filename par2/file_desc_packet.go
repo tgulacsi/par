@@ -27,6 +27,7 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/binary"
+	"fmt"
 	"io"
 )
 
@@ -37,6 +38,10 @@ type FileDescPacket struct {
 	MiniMD5    MD5
 	FileLength uint64
 	FileName   string
+}
+
+func (f FileDescPacket) String() string {
+	return fmt.Sprintf("%q %db [%s]", f.FileName, f.FileLength, f.FileID)
 }
 
 func (f *FileDescPacket) packetHeader() Header {

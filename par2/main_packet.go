@@ -27,6 +27,7 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -41,6 +42,16 @@ type MainPacket struct {
 	RecoverySetCount      uint32
 	RecoverySetFileIDs    []MD5
 	NonRecoverySetFileIDs []MD5
+}
+
+func (m MainPacket) String() string {
+	return fmt.Sprintf(`%s
+BlockSize: %d
+RecoverSetCount: %d
+RecoverSetFileIDs: %d
+NonRecoverySetFileIDs: %d`,
+		m.Header, m.BlockSize, m.RecoverySetCount,
+		len(m.RecoverySetFileIDs), len(m.NonRecoverySetFileIDs))
 }
 
 func (m *MainPacket) packetHeader() Header {

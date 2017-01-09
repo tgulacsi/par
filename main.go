@@ -16,7 +16,8 @@
 package main
 
 import (
-	"errors"
+	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"hash/crc32"
@@ -24,6 +25,9 @@ import (
 	"log"
 	"os"
 	"strings"
+
+	"github.com/pkg/errors"
+	"github.com/tgulacsi/par/par2"
 )
 
 const (
@@ -77,12 +81,16 @@ func main() {
 	restoreFlags := flag.NewFlagSet("restore", flag.ExitOnError)
 	flagOut := restoreFlags.String("o", "-", "output")
 
+	dumpFlags := flag.NewFlagSet("dump", flag.ExitOnError)
+
 	var flagSet *flag.FlagSet
 	switch todo {
 	case "c", "create":
 		todo, flagSet = "create", createFlags
 	case "r", "restore":
 		todo, flagSet = "restore", restoreFlags
+	case "d", "dump":
+		todo, flagSet = "dump", dumpFlags
 	default:
 		fmt.Fprintf(os.Stderr, `Create the parity file:
 
@@ -95,11 +103,20 @@ Restore the file from the parity:
 	par restore <file.par> [file]
 `)
 		restoreFlags.PrintDefaults()
+		fmt.Fprintf(os.Stderr, `
+
+Dump the file's contents for debugging:
+
+	par dump <file.par>
+`)
+		dumpFlags.PrintDefaults()
+
 		os.Exit(1)
 	}
 
 	flagSet.Parse(os.Args[1:])
-	if todo == "create" {
+	switch todo {
+	case "create":
 		inp := flagSet.Arg(0)
 		out := inp + ".par"
 		if len(flagSet.Args()) > 1 {
@@ -125,6 +142,39 @@ Restore the file from the parity:
 		}
 		if err := ver.CreateParFile(out, inp, dataShards, parityShards, shardSize); err != nil {
 			log.Fatal(err)
+		}
+		return
+	case "dump":
+		files := flagSet.Args()
+		fh, err := os.Open(files[0])
+		var a [1024]byte
+		n, err := io.ReadAtLeast(fh, a[:], 512)
+		if err != nil && n < 8 {
+			log.Fatal(err)
+		}
+		b := a[:n]
+		ver := VersionTAR
+		if len(b) > 256 && bytes.Contains(b[256:], []byte("\000ustar  \000")) {
+			ver = VersionTAR
+		} else if len(b) > 1 && b[0] == '{' {
+			ver = VersionJSON
+		} else {
+			ver = VersionPAR2
+		}
+
+		switch ver {
+		case VersionPAR2:
+			stat := &par2.ParInfo{
+				ParFiles: files,
+			}
+			if err := stat.Parse(); err != nil {
+				log.Fatal(err)
+			}
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			enc.Encode(stat)
+		default:
+			log.Fatal(errors.Errorf("dumping version %s not implemented", ver))
 		}
 		return
 	}

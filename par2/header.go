@@ -36,7 +36,7 @@ const validSequence string = "PAR2\000PKT"
 type Header struct {
 	// Sequence is a magic sequence. Used to quickly identify location of packets.
 	// Value = {'P', 'A', 'R', '2', '\0', 'P', 'K', 'T'} (ASCII)
-	Sequence [8]byte
+	Sequence Sequence
 	// Length of the entire packet. Must be multiple of 4. (NB: Includes length of header.)
 	Length uint64
 	// PacketMD5 is the MD5 hash of packet. Used as a checksum for the packet.
@@ -50,13 +50,23 @@ type Header struct {
 	// Type. Can be anything.
 	// All beginning "PAR " (ASCII) are reserved for specification-defined packets.
 	// Application-specific packets are recommended to begin with the ASCII name of the client.
-	Type    [16]byte
+	Type    Type
 	Damaged bool
 }
 
 func (h Header) String() string {
 	return fmt.Sprintf("%d:%s [%s] of [%s]", h.Length, h.Type[:], h.PacketMD5, h.RecoverySetID)
 }
+
+type Sequence [8]byte
+
+func (s Sequence) MarshalBinary() ([]byte, error) { return s[:], nil }
+func (s Sequence) MarshalText() ([]byte, error)   { return s[:], nil }
+
+type Type [16]byte
+
+func (t Type) MarshalBinary() ([]byte, error) { return t[:], nil }
+func (t Type) MarshalText() ([]byte, error)   { return t[:], nil }
 
 func (h *Header) SetType(typ PacketType) { copy(h.Type[:], typ[:16]) }
 

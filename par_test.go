@@ -37,7 +37,7 @@ func TestCR(t *testing.T) {
 	defer remove(parity.Name())
 	defer parity.Close()
 
-	if err := CreateParFile(parity.Name(), inp.Name(), 0, 0, 0); err != nil {
+	if err := VersionJSON.CreateParFile(parity.Name(), inp.Name(), 0, 0, 0); err != nil {
 		t.Fatalf("create: %+v", err)
 	}
 	if _, err := inp.Seek(0, io.SeekStart); err != nil {

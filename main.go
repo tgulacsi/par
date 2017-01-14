@@ -36,7 +36,7 @@ const (
 	VersionTAR
 
 	DefaultVersion      = VersionTAR
-	DefaultShardSize    = 512 << 10
+	DefaultShardSize    = 128 << 10
 	DefaultDataShards   = 10
 	DefaultParityShards = 3
 )

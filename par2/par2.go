@@ -79,6 +79,7 @@ func (m MD5) MarshalText() ([]byte, error) {
 	return a[:], nil
 }
 func (m MD5) MarshalBinary() ([]byte, error) { return m[:], nil }
+func (m MD5) IsZero() bool                   { return m == MD5{} }
 
 type CRC32 [4]byte
 

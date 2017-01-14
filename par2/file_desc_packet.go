@@ -87,7 +87,9 @@ func writeString(w io.Writer, s string) (int, error) {
 }
 
 func (f *FileDescPacket) writeBody(dest []byte) []byte {
-	f.recalc()
+	if f.FileID.IsZero() {
+		f.recalc()
+	}
 
 	buff := bytes.NewBuffer(dest[:0])
 	buff.Write(f.FileID[:])

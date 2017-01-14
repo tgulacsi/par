@@ -28,12 +28,7 @@ import (
 	"crypto/md5"
 	"encoding/binary"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
 	"sort"
-
-	"github.com/pkg/errors"
 )
 
 type MainPacket struct {
@@ -75,6 +70,8 @@ func (m *MainPacket) readBody(body []byte) {
 	}
 }
 
+// "The MD5 hash of the body of the main packet is used as the Recovery Set ID",
+// which is a hash of the slice size, the file count, and the file ids.
 func (m *MainPacket) writeBody(dest []byte) []byte {
 	m.RecoverySetCount = uint32(len(m.RecoverySetFileIDs))
 
@@ -82,29 +79,15 @@ func (m *MainPacket) writeBody(dest []byte) []byte {
 	binary.Write(buff, binary.LittleEndian, &m.BlockSize)
 	binary.Write(buff, binary.LittleEndian, &m.RecoverySetCount)
 
-	m.recalcIDs()
 	for _, arr := range [][]MD5{m.RecoverySetFileIDs, m.NonRecoverySetFileIDs} {
 		for _, fid := range arr {
 			buff.Write(fid[:])
 		}
 	}
-	return buff.Bytes()
-}
-
-func (m *MainPacket) recalcIDs() {
-	// Compute the SetID
 	hsh := md5.New()
-	for _, arr := range [][]MD5{m.RecoverySetFileIDs, m.NonRecoverySetFileIDs} {
-		if len(arr) > 1 {
-			sortMD5s(arr)
-		}
-		for _, fid := range arr {
-			hsh.Write(fid[:])
-		}
-	}
+	hsh.Write(buff.Bytes())
 	hsh.Sum(m.Header.RecoverySetID[:0])
-
-	// FIXME(tgulacsi): this is not finished, and probably wrong!
+	return buff.Bytes()
 }
 
 // sortMD5s sorts by numerical value (treating them as 16-byte unsigned integers).
@@ -124,49 +107,4 @@ func sortMD5s(p []MD5) {
 
 		return bytes.Compare(a[:], b[:]) == -1
 	})
-}
-
-func (m *MainPacket) AddFile(fileName string) (*FileDescPacket, error) {
-	fh, err := os.Open(fileName)
-	if err != nil {
-		return nil, errors.Wrap(err, fileName)
-	}
-	defer fh.Close()
-	return m.Add(fh, fh.Name())
-}
-
-func (m *MainPacket) Add(r io.Reader, name string) (*FileDescPacket, error) {
-	h := m.Header
-	h.SetType(TypeFileDescPacket)
-	fDesc := h.Create().(*FileDescPacket)
-	fDesc.FileName = filepath.Base(name)
-
-	h.SetType(TypeIFSCPacket)
-	hsh := md5.New()
-	n, err := io.CopyN(hsh, r, 16<<10)
-	fDesc.FileLength = uint64(n)
-	hsh.Sum(fDesc.MiniMD5[:0])
-	if err != nil {
-		if err != io.EOF {
-			return fDesc, errors.Wrap(err, name)
-		}
-		fDesc.MD5 = fDesc.MiniMD5
-	} else {
-		if n, err = io.Copy(hsh, r); err != nil {
-			return fDesc, errors.Wrap(err, name)
-		}
-		fDesc.FileLength += uint64(n)
-		hsh.Sum(fDesc.MD5[:0])
-	}
-	fDesc.recalc()
-	m.RecoverySetFileIDs = append(m.RecoverySetFileIDs, fDesc.FileID)
-	b := bytesPool.Get()
-	ho := m.Header
-	m.recalc(m.writeBody(b))
-	bytesPool.Put(b)
-	hn := m.Header
-	if ho == hn {
-		panic(errors.Errorf("Header didn't change: %#v", ho))
-	}
-	return fDesc, nil
 }

@@ -23,56 +23,93 @@
 package par2
 
 import (
+	"crypto/md5"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/pkg/errors"
-	"github.com/tgulacsi/par/par2"
 )
 
-type parWriter struct {
-	Main MainPacket
+type mainBuilder struct {
+	Main            *MainPacket
+	FileDescriptors []*FileDescPacket
 }
 
-func NewWriter() *parWriter {
-	return &parWriter{Main: CreatePacket(TypeMainPacket).(*MainPacket)}
+// NewMainBuilder returns a new writer which helps writing the needed packets.
+//
+// According to thee specification,
+// http://parchive.sourceforge.net/docs/specifications/parity-volume-spec/article-spec.html#i__134603784_511
+// 1. each packet has a header, which contains a checksum for the entire packet,
+// including the recovery set id, the type, and the body of the packet.
+//
+// 2. "The MD5 hash of the body of the main packet is used as the Recovery Set ID",
+// which is a hash of the slice size, the file count, and the file ids.
+//
+// 3. The File ID in this version is calculated as the MD5 Hash of the short MD5 hash
+// of the file's first 16k, the length, and ASCII file name.
+//
+// So we need to know all the included files,
+// calculate its IDs,
+// put them in the Main packet,
+// calculate the Recovery Set ID,
+// put that into EVERY packet,
+// calculate each header's hash, and go on.
+func NewMainBuilder() *mainBuilder {
+	return &mainBuilder{Main: CreatePacket(TypeMainPacket).(*MainPacket)}
 }
 
-func (pw *parWriter) AddFile(name string) error {
+func (pw *mainBuilder) AddFile(name string) (*FileDescPacket, error) {
 	fh, err := os.Open(name)
 	if err != nil {
-		return errors.Wrap(err, name)
+		return nil, errors.Wrap(err, name)
 	}
-	err = pw.AddReader(name, fh)
+	fDesc, err := pw.AddReader(name, fh)
 	_ = fh.Close()
-	return err
+	return fDesc, err
 }
 
 // AddReader adds the reader with the given filename to the recovery set.
-func (pw *parWriter) AddReader(name string, r io.Reader) error {
-	fDescPkt, err := pw.Main.Add(r, name)
+//
+// Creates the FileDescPacket and appends it to the Main packet's RecoverySetFileIDs.
+func (mb *mainBuilder) AddReader(name string, r io.Reader) (*FileDescPacket, error) {
+	h := mb.Main.Header
+	h.SetType(TypeFileDescPacket)
+	fDesc := h.Create().(*FileDescPacket)
+	fDesc.FileName = filepath.Base(name)
+
+	hsh := md5.New()
+	n, err := io.CopyN(hsh, r, 16<<10)
+	fDesc.FileLength = uint64(n)
+	hsh.Sum(fDesc.MiniMD5[:0])
 	if err != nil {
-		return err
+		if err != io.EOF {
+			return fDesc, errors.Wrap(err, name)
+		}
+		fDesc.MD5 = fDesc.MiniMD5
+	} else {
+		if n, err = io.Copy(hsh, r); err != nil {
+			return fDesc, errors.Wrap(err, name)
+		}
+		fDesc.FileLength += uint64(n)
+		hsh.Sum(fDesc.MD5[:0])
 	}
-	prw.FileID = fDescPkt.FileID
+	fDesc.recalc()
+	mb.FileDescriptors = append(mb.FileDescriptors, fDesc)
+	mb.Main.RecoverySetFileIDs = append(mb.Main.RecoverySetFileIDs, fDesc.FileID)
 
-	prw.Header = mainPkt.Header
-	prw.raidPkts = []par2.Packet{mainPkt, fDescPkt}
-
-	crPkt := par2.CreatePacket(par2.TypeCreatorPacket).(*par2.CreatorPacket)
-	crPkt.RecoverySetID = mainPkt.RecoverySetID
-	crPkt.Creator = Creator
-	if err := writePackets(w, append(prw.raidPkts, crPkt, mainPkt, fDescPkt)); err != nil {
-		return nil, err
-	}
-	return &prw, nil
+	return fDesc, nil
 }
 
-func (rw *rsPAR2Writer) Close() error {
-	err := rw.WriteShards()
-	if err != nil {
-		return err
+// Finish the adding of new files, calculate the RecoverySetID and return the Main packet.
+func (mb *mainBuilder) Finish() *MainPacket {
+	b := bytesPool.Get()
+	mb.Main.writeBody(b)
+	bytesPool.Put(b)
+
+	for _, fDesc := range mb.FileDescriptors {
+		fDesc.RecoverySetID = mb.Main.RecoverySetID
 	}
-	return writePackets(rw.w,
-		append(append([]par2.Packet{rw.ifsc}, rw.raidPkts...), rw.ifsc))
+
+	return mb.Main
 }

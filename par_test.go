@@ -17,14 +17,19 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/kylelemons/godebug/diff"
+	"github.com/pkg/errors"
 )
+
+var errFatal = errors.New("fatal")
 
 func TestCR(t *testing.T) {
 	inp, err := os.Open("main.go")
@@ -37,40 +42,60 @@ func TestCR(t *testing.T) {
 	defer remove(parity.Name())
 	defer parity.Close()
 
-	if err := VersionJSON.CreateParFile(parity.Name(), inp.Name(), 0, 0, 0); err != nil {
-		t.Fatalf("create: %+v", err)
+	for _, ver := range []version{VersionJSON, VersionTAR, VersionPAR2} {
+		if _, err := inp.Seek(0, io.SeekStart); err != nil {
+			t.Fatal(err)
+		}
+		if err := testCR(ver, parity.Name(), inp); err != nil {
+			if errors.Cause(err) == errFatal {
+				t.Fatal("%s: %+v", ver, err)
+			}
+			t.Errorf("%s: %v", ver, err)
+		}
+	}
+}
+
+func testCR(ver version, parityName string, inp *os.File) error {
+	if err := ver.CreateParFile(parityName, inp.Name(), 0, 0, 0); err != nil {
+		return errors.Wrapf(errFatal, "create: %+v", err)
 	}
 	if _, err := inp.Seek(0, io.SeekStart); err != nil {
-		t.Fatalf("rewind %q: %v", inp.Name(), err)
+		return errors.Wrapf(errFatal, "rewind %q: %v", inp.Name(), err)
 	}
 
 	orig, err := ioutil.ReadAll(inp)
 	if err != nil {
-		t.Fatalf("read %q: %v", inp.Name(), err)
+		return errors.Wrapf(errFatal, "read %q: %v", inp.Name(), err)
 	}
 	changed, err := ioutil.TempFile("", "par-")
 	if err != nil {
-		t.Fatal(err)
+		return errors.Wrapf(errFatal, "%+v", err)
 	}
 	defer remove(changed.Name())
 	n := len(orig) / 2
 	changed.Write(orig[:n])
 	changed.Write([]byte{orig[n] + 1})
 	if _, err := changed.Write(orig[n+1:]); err != nil {
-		t.Fatalf("write changed file %q: %v", changed.Name(), err)
+		return errors.Wrapf(errFatal, "write changed file %q: %v", changed.Name(), err)
 	}
 	if err := changed.Close(); err != nil {
-		t.Fatal(err)
+		return errors.Wrapf(errFatal, "%+v", err)
 	}
 
 	var restored bytes.Buffer
-	if err := RestoreParFile(&restored, parity.Name(), inp.Name()); err != nil {
-		t.Fatalf("Restore: %v", err)
+	if err := RestoreParFile(&restored, parityName, inp.Name()); err != nil {
+		return errors.Wrapf(errFatal, "Restore: %v", err)
 	}
 
-	if d := diff.Diff(string(orig), restored.String()); d != "" {
-		t.Error(d)
+	if d := strings.TrimSuffix(
+		diff.Diff(string(orig), restored.String()),
+		"-\n+",
+	); d != "" {
+		fmt.Fprintf(os.Stderr, "LENGTH: got %d, wanted %d; END: %q\n",
+			len(restored.String()), len(orig), d[len(d)-10:])
+		return errors.New(d)
 	}
+	return nil
 }
 
 var KeepFiles = os.Getenv("KEEP_FILES") == "1"

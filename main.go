@@ -45,6 +45,19 @@ var ErrUnknownVersion = errors.New("unknown version")
 
 type version uint8
 
+func (v version) String() string {
+	switch v {
+	case VersionJSON:
+		return "JSON"
+	case VersionPAR2:
+		return "PAR2"
+	case VersionTAR:
+		return "TAR"
+	default:
+		return fmt.Sprintf("V%02", v)
+	}
+}
+
 // Need to save the metadata of:
 //   1. file (real data) size
 //   2. number of data/parity shards

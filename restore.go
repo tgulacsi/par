@@ -235,6 +235,9 @@ func (rsw rsWriterTo) WriteTo(w io.Writer) (int64, error) {
 				if errors.Cause(err) == errShardBroken {
 					slices[i] = nil
 					missing++
+					if i < D {
+						totalSize += int(sm.Size)
+					}
 					continue
 				}
 				return written, err
@@ -259,7 +262,7 @@ func (rsw rsWriterTo) WriteTo(w io.Writer) (int64, error) {
 			if err := rsw.rsDec.Reconstruct(slices); err != nil {
 				return written, errors.Wrap(err, "Reconstruct")
 			}
-			totalSize += int(sm.Size)
+			//totalSize += int(sm.Size)
 		}
 		if ok, err := rsw.rsDec.Verify(slices); err != nil {
 			return written, errors.Wrap(err, "Verify")

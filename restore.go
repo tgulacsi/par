@@ -46,7 +46,7 @@ func RestoreParFile(w io.Writer, parFn, fileName string) error {
 		return errors.Wrap(err, parFn)
 	}
 	ver := VersionTAR
-	if bytes.Equal(b, []byte("PAR2\000")) {
+	if bytes.Equal(b[:5], []byte("PAR2\000")) {
 		ver = VersionPAR2
 	} else if b[0] == '{' {
 		ver = VersionJSON

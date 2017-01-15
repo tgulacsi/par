@@ -17,7 +17,6 @@ package main
 
 import (
 	"bytes"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -46,56 +45,50 @@ func TestCR(t *testing.T) {
 		if _, err := inp.Seek(0, io.SeekStart); err != nil {
 			t.Fatal(err)
 		}
-		if err := testCR(ver, parity.Name(), inp); err != nil {
-			if errors.Cause(err) == errFatal {
-				t.Fatal("%s: %+v", ver, err)
-			}
-			t.Errorf("%s: %v", ver, err)
-		}
+		testCR(t, ver, parity.Name(), inp)
 	}
 }
 
-func testCR(ver version, parityName string, inp *os.File) error {
+func testCR(t *testing.T, ver version, parityName string, inp *os.File) {
 	if err := ver.CreateParFile(parityName, inp.Name(), 0, 0, 0); err != nil {
-		return errors.Wrapf(errFatal, "create: %+v", err)
+		t.Fatalf("%s. %+v", ver, err)
 	}
 	if _, err := inp.Seek(0, io.SeekStart); err != nil {
-		return errors.Wrapf(errFatal, "rewind %q: %v", inp.Name(), err)
+		t.Fatalf("%s. rewind %q: %v", ver, inp.Name(), err)
 	}
 
 	orig, err := ioutil.ReadAll(inp)
 	if err != nil {
-		return errors.Wrapf(errFatal, "read %q: %v", inp.Name(), err)
+		t.Fatalf("%s. read %q: %v", ver, inp.Name(), err)
 	}
 	changed, err := ioutil.TempFile("", "par-")
 	if err != nil {
-		return errors.Wrapf(errFatal, "%+v", err)
+		t.Fatalf("%s. %v", ver, err)
 	}
 	defer remove(changed.Name())
 	n := len(orig) / 2
 	changed.Write(orig[:n])
 	changed.Write([]byte{orig[n] + 1})
 	if _, err := changed.Write(orig[n+1:]); err != nil {
-		return errors.Wrapf(errFatal, "write changed file %q: %v", changed.Name(), err)
+		t.Fatalf("%s. write changed file %q: %v", ver, changed.Name(), err)
 	}
 	if err := changed.Close(); err != nil {
-		return errors.Wrapf(errFatal, "%+v", err)
+		t.Fatalf("%s. %v", err)
 	}
 
 	var restored bytes.Buffer
 	if err := RestoreParFile(&restored, parityName, inp.Name()); err != nil {
-		return errors.Wrapf(errFatal, "Restore: %v", err)
+		t.Fatalf("%s. Restore: %v", ver, err)
 	}
 
 	if d := strings.TrimSuffix(
 		diff.Diff(string(orig), restored.String()),
 		"-\n+",
 	); d != "" {
-		fmt.Fprintf(os.Stderr, "LENGTH: got %d, wanted %d; END: %q\n",
-			len(restored.String()), len(orig), d[len(d)-10:])
-		return errors.New(d)
+		t.Logf("%s. LENGTH: got %d, wanted %d; END: %q\n",
+			ver, len(restored.String()), len(orig), d[len(d)-10:])
+		t.Errorf("%s. %s", ver, d)
 	}
-	return nil
 }
 
 var KeepFiles = os.Getenv("KEEP_FILES") == "1"

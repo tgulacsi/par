@@ -21,6 +21,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/pkg/errors"
 	"github.com/tgulacsi/par/par2"
@@ -45,13 +46,14 @@ func NewPAR2Writer(w io.Writer, meta FileMetadata) (*rsPAR2Writer, error) {
 	prw := rsPAR2Writer{w: w}
 	prw.rsEnc = meta.newRSEnc(prw.writeShards)
 	prw.meta = meta
+	prw.meta.FileName = filepath.Base(prw.meta.FileName)
 	fh, err := os.Open(meta.FileName)
 	if err != nil {
 		return nil, errors.Wrap(err, meta.FileName)
 	}
 
 	mb := par2.NewMainBuilder()
-	fDescPkt, err := mb.AddReader(meta.FileName, fh)
+	fDescPkt, err := mb.AddReader(prw.meta.FileName, fh)
 	fh.Close()
 	if err != nil {
 		return nil, err

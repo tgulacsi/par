@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"hash/crc32"
 	"io"
+	"path/filepath"
 )
 
 var _ = io.WriteCloser((*rsJSONWriter)(nil))
@@ -34,6 +35,7 @@ func NewRSJSONWriter(w io.Writer, meta FileMetadata) (*rsJSONWriter, error) {
 	jsw := rsJSONWriter{w: w}
 	jsw.rsEnc = meta.newRSEnc(jsw.writeShards)
 	jsw.meta = meta
+	meta.FileName = filepath.Base(meta.FileName)
 	if err := json.NewEncoder(w).Encode(meta); err != nil {
 		return nil, err
 	}

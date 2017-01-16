@@ -16,10 +16,10 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"os"
-	"path/filepath"
 
 	"github.com/klauspost/reedsolomon"
 	"github.com/pkg/errors"
@@ -28,31 +28,32 @@ import (
 func (ver version) CreateParFile(out, inp string, D, P, shardSize int) error {
 	log.Printf("Create %q for %q.", out, inp)
 	if out == inp {
-		return errors.New("inp must be differ from out!")
+		return errors.Errorf("inp=%q must be differ from out!", inp)
 	}
 	fh, err := os.Open(inp)
 	if err != nil {
-		return errors.Wrap(err, inp)
+		return errors.Wrap(err, "CreateParFile input")
 	}
 	defer fh.Close()
 
 	pfh, err := os.Create(out)
 	if err != nil {
-		return errors.Wrap(err, out)
+		return errors.Wrap(err, "Create "+out)
 	}
 	defer pfh.Close()
 	if n := shardSize % 4; n != 0 {
 		shardSize += 4 - n
 	}
-	w, err := FileMetadata{
+	meta := FileMetadata{
 		DataShards: uint8(D), ParityShards: uint8(P),
 		ShardSize:  uint32(shardSize),
-		FileName:   filepath.Base(fh.Name()),
+		FileName:   fh.Name(),
 		OnlyParity: true,
 		Version:    ver,
-	}.NewWriter(pfh)
+	}
+	w, err := meta.NewWriter(pfh)
 	if err != nil {
-		return err
+		return errors.WithMessage(err, fmt.Sprintf("%#v", meta))
 	}
 	if _, err := io.Copy(w, fh); err != nil {
 		return errors.Wrap(err, "copy")

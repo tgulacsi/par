@@ -69,7 +69,10 @@ func (f *FileDescPacket) recalc() {
 	hsh := md5.New()
 	hsh.Write(f.MiniMD5[:])
 	binary.Write(hsh, binary.LittleEndian, f.FileLength)
-	writeString(hsh, f.FileName)
+	// According to the spec, the file name is extended to 4-dividable length with zero bytes.
+	// But according to my tests, par does not count those zeroes into the hash!
+	//writeString(hsh, f.FileName)
+	io.WriteString(hsh, f.FileName)
 
 	hsh.Sum(f.FileID[:0])
 }

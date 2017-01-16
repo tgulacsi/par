@@ -22,6 +22,7 @@ import (
 	"hash/crc32"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/pkg/errors"
@@ -40,6 +41,7 @@ func NewRSTarWriter(w io.Writer, meta FileMetadata) (*rsTarWriter, error) {
 	tw := rsTarWriter{w: tar.NewWriter(w)}
 	tw.rsEnc = meta.newRSEnc(tw.writeShards)
 	tw.meta = meta
+	meta.FileName = filepath.Base(meta.FileName)
 	b, err := json.Marshal(meta)
 	if err != nil {
 		return nil, err

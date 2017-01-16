@@ -45,4 +45,12 @@ func TestFileInfo(t *testing.T) {
 	if got, want := gFp.FileID, wFp.FileID; got != want {
 		t.Errorf("got FileID %s, wanted %s", got, want)
 	}
+
+	b := bytesPool.Get()
+	defer bytesPool.Put(b)
+	gFp.Header.RecoverySetID = wFp.RecoverySetID
+	gFp.Header.recalc(gFp.writeBody(b))
+	if got, want := gFp.PacketMD5, wFp.PacketMD5; got != want {
+		t.Errorf("got PacketMD5 %s, wanted %s", got, want)
+	}
 }

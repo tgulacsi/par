@@ -24,6 +24,8 @@ package par2
 
 import (
 	"crypto/md5"
+	"hash"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -34,6 +36,7 @@ import (
 type mainBuilder struct {
 	Main            *MainPacket
 	FileDescriptors []*FileDescPacket
+	IFSCs           []*IFSCPacket
 }
 
 // NewMainBuilder returns a new writer which helps writing the needed packets.
@@ -55,50 +58,63 @@ type mainBuilder struct {
 // calculate the Recovery Set ID,
 // put that into EVERY packet,
 // calculate each header's hash, and go on.
-func NewMainBuilder() *mainBuilder {
-	return &mainBuilder{Main: CreatePacket(TypeMainPacket).(*MainPacket)}
+func NewMainBuilder(blockSize int) *mainBuilder {
+	m := CreatePacket(TypeMainPacket).(*MainPacket)
+	m.BlockSize = uint64(blockSize)
+	return &mainBuilder{Main: m}
 }
 
-func (pw *mainBuilder) AddFile(name string) (*FileDescPacket, error) {
+func (pw *mainBuilder) AddFile(name string) (*FileDescPacket, *IFSCPacket, error) {
 	fh, err := os.Open(name)
 	if err != nil {
-		return nil, errors.Wrap(err, name)
+		return nil, nil, errors.Wrap(err, name)
 	}
-	fDesc, err := pw.AddReader(name, fh)
+	fDesc, ifsc, err := pw.AddReader(name, fh)
 	_ = fh.Close()
-	return fDesc, err
+	return fDesc, ifsc, err
 }
 
 // AddReader adds the reader with the given filename to the recovery set.
 //
 // Creates the FileDescPacket and appends it to the Main packet's RecoverySetFileIDs.
-func (mb *mainBuilder) AddReader(name string, r io.Reader) (*FileDescPacket, error) {
+// Also creates the IFSCPacket.
+func (mb *mainBuilder) AddReader(name string, r io.Reader) (*FileDescPacket, *IFSCPacket, error) {
 	h := mb.Main.Header
 	h.SetType(TypeFileDescPacket)
 	fDesc := h.Create().(*FileDescPacket)
 	fDesc.FileName = filepath.Base(name)
+	h.SetType(TypeIFSCPacket)
+	ifsc := h.Create().(*IFSCPacket)
 
 	hsh := md5.New()
-	n, err := io.CopyN(hsh, r, 16<<10)
+	pw := NewChecksumPairWriter()
+	cw := NewChunkWriter(pw, int(mb.Main.BlockSize))
+	w := io.MultiWriter(hsh, cw)
+	n, err := io.CopyN(w, r, 16<<10)
 	fDesc.FileLength = uint64(n)
 	hsh.Sum(fDesc.MiniMD5[:0])
 	if err != nil {
 		if err != io.EOF {
-			return fDesc, errors.Wrap(err, name)
+			return fDesc, ifsc, errors.Wrap(err, name)
 		}
 		fDesc.MD5 = fDesc.MiniMD5
 	} else {
-		if n, err = io.Copy(hsh, r); err != nil {
-			return fDesc, errors.Wrap(err, name)
+		if n, err = io.Copy(w, r); err != nil {
+			return fDesc, ifsc, errors.Wrap(err, name)
 		}
 		fDesc.FileLength += uint64(n)
 		hsh.Sum(fDesc.MD5[:0])
 	}
+	if err = cw.Close(); err != nil {
+		return fDesc, ifsc, err
+	}
+	ifsc.Pairs = pw.Pairs
 	fDesc.recalc()
+	ifsc.FileID = fDesc.FileID
 	mb.FileDescriptors = append(mb.FileDescriptors, fDesc)
 	mb.Main.RecoverySetFileIDs = append(mb.Main.RecoverySetFileIDs, fDesc.FileID)
 
-	return fDesc, nil
+	return fDesc, ifsc, nil
 }
 
 // Finish the adding of new files, calculate the RecoverySetID and return the Main packet.
@@ -110,6 +126,75 @@ func (mb *mainBuilder) Finish() *MainPacket {
 	for _, fDesc := range mb.FileDescriptors {
 		fDesc.RecoverySetID = mb.Main.RecoverySetID
 	}
+	for _, ifsc := range mb.IFSCs {
+		ifsc.RecoverySetID = mb.Main.RecoverySetID
+	}
 
 	return mb.Main
+}
+
+type chunkWriter struct {
+	io.Writer
+	Size int
+	buf  []byte
+}
+
+func NewChunkWriter(w io.Writer, size int) *chunkWriter {
+	return &chunkWriter{Writer: w, Size: size, buf: make([]byte, size)}
+}
+func (w *chunkWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	for {
+		i := w.Size - len(w.buf)
+		if i > len(p) {
+			w.buf = append(w.buf, p...)
+			return n, nil
+		}
+		w.buf = append(w.buf, p[:i]...)
+		p = p[i:]
+		_, err := w.Writer.Write(w.buf)
+		w.buf = w.buf[:0]
+		if err != nil {
+			return n, err
+		}
+	}
+}
+func (w *chunkWriter) Close() error {
+	if len(w.buf) == 0 {
+		return nil
+	}
+	n, err := w.Write(w.buf)
+	w.buf = w.buf[len(w.buf)-n:]
+	return err
+}
+
+type checksumPairWriter struct {
+	md5   hash.Hash
+	crc   hash.Hash32
+	Pairs []ChecksumPair
+}
+
+func NewChecksumPairWriter() *checksumPairWriter {
+	return &checksumPairWriter{md5: md5.New(), crc: crc32.NewIEEE()}
+}
+func (w *checksumPairWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	var pair ChecksumPair
+
+	w.md5.Reset()
+	_, err := w.md5.Write(p)
+	if err != nil {
+		return n, err
+	}
+	w.md5.Sum(pair.MD5[:0])
+
+	w.crc.Reset()
+	_, err = w.crc.Write(p)
+	if err != nil {
+		return n, err
+	}
+	w.crc.Sum(pair.CRC32[:0])
+
+	w.Pairs = append(w.Pairs, pair)
+	return n, nil
 }

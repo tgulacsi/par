@@ -8,8 +8,8 @@ import (
 func TestHeaderWriteTo(t *testing.T) {
 	var buf bytes.Buffer
 
-	mb := NewMainBuilder()
-	_, err := mb.AddFile("header_test.go")
+	mb := NewMainBuilder(128 << 10)
+	_, _, err := mb.AddFile("header_test.go")
 	pkt := mb.Finish()
 	if err != nil {
 		t.Fatal(err)

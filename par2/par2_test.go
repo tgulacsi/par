@@ -29,10 +29,11 @@ func TestFileInfo(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	wIp := info.Files[0].IFSCPacket
 	wFp := info.Files[0].FileDescPacket
 
-	mb := NewMainBuilder()
-	gFp, err := mb.AddFile("testdata/input.txt")
+	mb := NewMainBuilder(128 << 10)
+	gFp, gIp, err := mb.AddFile("testdata/input.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,4 +54,7 @@ func TestFileInfo(t *testing.T) {
 	if got, want := gFp.PacketMD5, wFp.PacketMD5; got != want {
 		t.Errorf("got PacketMD5 %s, wanted %s", got, want)
 	}
+	// TODO(tgulacsi): check these, too
+	t.Log(wIp)
+	t.Log(gIp)
 }

@@ -52,13 +52,14 @@ func NewPAR2Writer(w io.Writer, meta FileMetadata) (*rsPAR2Writer, error) {
 		return nil, errors.Wrap(err, meta.FileName)
 	}
 
-	mb := par2.NewMainBuilder()
-	fDescPkt, err := mb.AddReader(prw.meta.FileName, fh)
+	mb := par2.NewMainBuilder(int(meta.ShardSize))
+	fDescPkt, ifsc, err := mb.AddReader(prw.meta.FileName, fh)
 	fh.Close()
 	if err != nil {
 		return nil, err
 	}
 	mainPkt := mb.Finish()
+	prw.ifsc = ifsc
 	prw.FileID = fDescPkt.FileID
 
 	prw.Header = mainPkt.Header

@@ -2,8 +2,9 @@ package par2
 
 import "testing"
 
-//go:generate par2create -r30 -s131072 -n1 -a testdata/input.txt.par2 testdata/input.txt
-//go:generate par d testdata/input.txt.vol0+1.par2
+//go:generate rm testdata/input.txt.vol*.par2
+//go:generate par2create -r30 -s2048 -n1 -a testdata/input.txt.par2 testdata/input.txt
+// go:generate par d testdata/input.txt.vol0+1.par2
 
 func TestMD5(t *testing.T) {
 	info, err := Stat("testdata/input.txt.par2")
@@ -32,7 +33,7 @@ func TestFileInfo(t *testing.T) {
 	wIp := info.Files[0].IFSCPacket
 	wFp := info.Files[0].FileDescPacket
 
-	mb := NewMainBuilder(128 << 10)
+	mb := NewMainBuilder(int(info.Main.BlockSize))
 	gFp, gIp, err := mb.AddFile("testdata/input.txt")
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +55,20 @@ func TestFileInfo(t *testing.T) {
 	if got, want := gFp.PacketMD5, wFp.PacketMD5; got != want {
 		t.Errorf("got PacketMD5 %s, wanted %s", got, want)
 	}
-	// TODO(tgulacsi): check these, too
-	t.Log(wIp)
-	t.Log(gIp)
+	if gIp.FileID != wIp.FileID {
+		t.Errorf("FileID mismatch: got %s wanted %s.", gIp.FileID, wIp.FileID)
+	}
+	g, w := len(gIp.Pairs), len(wIp.Pairs)
+	if g != w {
+		t.Errorf("got %d ifsc pairs, wanted %d", g, w)
+		if g > w {
+			g = w
+		}
+	}
+	for i := 0; i < g; i++ {
+		got, want := gIp.Pairs[i], wIp.Pairs[i]
+		if got != want {
+			t.Errorf("%d. got %v, wanted %v", i, got, want)
+		}
+	}
 }

@@ -89,6 +89,7 @@ func (mb *mainBuilder) AddReader(name string, r io.Reader) (*FileDescPacket, *IF
 	hsh := md5.New()
 	pw := NewChecksumPairWriter()
 	cw := NewChunkWriter(pw, int(mb.Main.BlockSize))
+	cw.Pad = true
 	w := io.MultiWriter(hsh, cw)
 	n, err := io.CopyN(w, r, 16<<10)
 	fDesc.FileLength = uint64(n)
@@ -111,6 +112,7 @@ func (mb *mainBuilder) AddReader(name string, r io.Reader) (*FileDescPacket, *IF
 	ifsc.Pairs = pw.Pairs
 	fDesc.recalc()
 	ifsc.FileID = fDesc.FileID
+	mb.IFSCs = append(mb.IFSCs, ifsc)
 	mb.FileDescriptors = append(mb.FileDescriptors, fDesc)
 	mb.Main.RecoverySetFileIDs = append(mb.Main.RecoverySetFileIDs, fDesc.FileID)
 
@@ -135,36 +137,62 @@ func (mb *mainBuilder) Finish() *MainPacket {
 
 type chunkWriter struct {
 	io.Writer
-	Size int
-	buf  []byte
+	buf []byte
+	Pad bool
 }
 
 func NewChunkWriter(w io.Writer, size int) *chunkWriter {
-	return &chunkWriter{Writer: w, Size: size, buf: make([]byte, size)}
+	return &chunkWriter{Writer: w, buf: make([]byte, 0, size)}
 }
 func (w *chunkWriter) Write(p []byte) (int, error) {
+	Size := cap(w.buf)
 	n := len(p)
-	for {
-		i := w.Size - len(w.buf)
-		if i > len(p) {
+	if len(w.buf)+n < Size {
+		w.buf = append(w.buf, p...)
+		return n, nil
+	}
+
+	if len(w.buf) > 0 {
+		i := Size - len(w.buf)
+		w.buf = append(w.buf, p[:i]...)
+		p = p[i:]
+		if _, err := w.Writer.Write(w.buf); err != nil {
+			return n, err
+		}
+		w.buf = w.buf[:0]
+	}
+
+	for len(p) > 0 {
+		if len(p) < Size {
 			w.buf = append(w.buf, p...)
 			return n, nil
 		}
-		w.buf = append(w.buf, p[:i]...)
-		p = p[i:]
-		_, err := w.Writer.Write(w.buf)
-		w.buf = w.buf[:0]
-		if err != nil {
+		q := p[:Size]
+		p = p[Size:]
+		if _, err := w.Writer.Write(q); err != nil {
 			return n, err
 		}
 	}
+	return n, nil
 }
 func (w *chunkWriter) Close() error {
-	if len(w.buf) == 0 {
+	if w.Writer == nil {
 		return nil
 	}
-	n, err := w.Write(w.buf)
-	w.buf = w.buf[len(w.buf)-n:]
+	if len(w.buf) == 0 {
+		w.Writer = nil
+		return nil
+	}
+	if length := len(w.buf); w.Pad && length < cap(w.buf) {
+		w.buf = w.buf[:cap(w.buf)]
+		for i := length; i < len(w.buf); i++ {
+			w.buf[i] = 0
+		}
+	}
+	_, err := w.Writer.Write(w.buf)
+	w.buf = w.buf[:0]
+
+	w.Writer = nil
 	return err
 }
 
@@ -194,6 +222,9 @@ func (w *checksumPairWriter) Write(p []byte) (int, error) {
 		return n, err
 	}
 	w.crc.Sum(pair.CRC32[:0])
+	// reverse from big-endian to little-endian
+	pair.CRC32[0], pair.CRC32[1], pair.CRC32[2], pair.CRC32[3] =
+		pair.CRC32[3], pair.CRC32[2], pair.CRC32[1], pair.CRC32[0]
 
 	w.Pairs = append(w.Pairs, pair)
 	return n, nil

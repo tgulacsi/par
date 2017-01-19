@@ -2,7 +2,7 @@ package par2
 
 import "testing"
 
-//go:generate rm testdata/input.txt.vol*.par2
+//go:generate rm -f testdata/input.txt.vol*.par2
 //go:generate par2create -r30 -s2048 -n1 -a testdata/input.txt.par2 testdata/input.txt
 // go:generate par d testdata/input.txt.vol0+1.par2
 

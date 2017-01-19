@@ -16,8 +16,6 @@
 package main
 
 import (
-	"crypto/md5"
-	"hash/crc32"
 	"io"
 	"log"
 	"os"
@@ -37,7 +35,6 @@ type rsPAR2Writer struct {
 	meta   FileMetadata
 	FileID par2.MD5
 	Header par2.Header
-	ifsc   *par2.IFSCPacket
 	// raidPkts contains the packets to be repeated
 	raidPkts []par2.Packet
 }
@@ -59,7 +56,6 @@ func NewPAR2Writer(w io.Writer, meta FileMetadata) (*rsPAR2Writer, error) {
 		return nil, err
 	}
 	mainPkt := mb.Finish()
-	prw.ifsc = ifsc
 	prw.FileID = fDescPkt.FileID
 
 	prw.Header = mainPkt.Header
@@ -68,7 +64,7 @@ func NewPAR2Writer(w io.Writer, meta FileMetadata) (*rsPAR2Writer, error) {
 	crPkt := par2.CreatePacket(par2.TypeCreatorPacket).(*par2.CreatorPacket)
 	crPkt.RecoverySetID = mainPkt.RecoverySetID
 	crPkt.Creator = Creator
-	if err := writePackets(w, append(prw.raidPkts, crPkt, mainPkt, fDescPkt)); err != nil {
+	if err := writePackets(w, append(prw.raidPkts, crPkt, ifsc)); err != nil {
 		return nil, err
 	}
 	return &prw, nil
@@ -79,21 +75,14 @@ func (rw *rsPAR2Writer) Close() error {
 	if err != nil {
 		return err
 	}
-	return writePackets(rw.w,
-		append(append([]par2.Packet{rw.ifsc}, rw.raidPkts...), rw.ifsc))
+	return writePackets(rw.w, rw.raidPkts)
 }
 
 func (rw *rsPAR2Writer) writeShards(slices [][]byte, length int) error {
 	h := rw.Header
-	if rw.ifsc == nil {
-		h.SetType(par2.TypeIFSCPacket)
-		rw.ifsc = h.Create().(*par2.IFSCPacket)
-		rw.ifsc.FileID = rw.FileID
-	}
 	h.SetType(par2.TypeRecoverySlicePacket)
 	recov := *(h.Create().(*par2.RecoverySlicePacket))
 
-	hshCRC, hshMD5 := crc32.NewIEEE(), md5.New()
 	log.Printf("writeShards(%d, %d) ds=%d", len(slices), length, rw.meta.DataShards)
 	for i, b := range slices {
 		isDataShard := i < int(rw.meta.DataShards)
@@ -102,16 +91,6 @@ func (rw *rsPAR2Writer) writeShards(slices [][]byte, length int) error {
 				b = b[:length]
 			}
 			length -= len(b)
-
-			var cp par2.ChecksumPair
-			hshCRC.Reset()
-			hshCRC.Write(b)
-			hshCRC.Sum(cp.CRC32[:0])
-			hshMD5.Reset()
-			hshMD5.Write(b)
-			hshMD5.Sum(cp.MD5[:0])
-			rw.ifsc.Pairs = append(rw.ifsc.Pairs, cp)
-
 			continue
 		}
 

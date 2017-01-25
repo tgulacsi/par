@@ -49,7 +49,7 @@ func newPAR2NextShard(meta FileMetadata, parity namedReader, data io.Reader) fun
 	var got par2.ChecksumPair
 
 	return func(p []byte, i int) (ShardMetadata, []byte, error) {
-		if totalSize == 0 {
+		if i == 0 && totalSize == 0 {
 			return ShardMetadata{}, nil, io.EOF
 		}
 		index++
@@ -58,7 +58,6 @@ func newPAR2NextShard(meta FileMetadata, parity namedReader, data io.Reader) fun
 		length := int(info.Main.BlockSize)
 		sm := ShardMetadata{Index: uint32(index + 1), Size: meta.ShardSize}
 
-		log.Println(i, totalSize)
 		if i < D {
 			dataIndex++
 			if totalSize < uint64(length) {
@@ -79,7 +78,6 @@ func newPAR2NextShard(meta FileMetadata, parity namedReader, data io.Reader) fun
 				}
 				return sm, nil, err
 			}
-			log.Println("read", n)
 
 			if length < len(p) {
 				zero(p[length:])

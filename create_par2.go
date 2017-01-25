@@ -37,6 +37,8 @@ type rsPAR2Writer struct {
 	Header par2.Header
 	// raidPkts contains the packets to be repeated
 	raidPkts []par2.Packet
+
+	e expCount
 }
 
 func NewPAR2Writer(w io.Writer, meta FileMetadata) (*rsPAR2Writer, error) {
@@ -94,6 +96,7 @@ func (rw *rsPAR2Writer) writeShards(slices [][]byte, length int) error {
 			continue
 		}
 
+		recov.Exponent = rw.e.Next()
 		// parity shard
 		recov.RecoveryData = b
 		if err := writePackets(rw.w, append(rw.raidPkts, &recov)); err != nil {
@@ -110,4 +113,27 @@ func writePackets(w io.Writer, packets []par2.Packet) error {
 		}
 	}
 	return nil
+}
+
+// The first constant is the first power of two that has order 65535.
+// The second constant is the next power of two that has order 65535.
+// And so on. A power of two has order 65535 if the exponent is not equal to 0 modulus 3, 5, 17, or 257.
+// In C code, that would be (n%3 != 0 && n%5 != 0 && n%17 != 0 && n%257 != 0).
+// Note - this is the exponent being tested, and not the constant itself. There are 32768 valid constants.
+type expCount uint32
+
+// Next returns the next exponent with order 65535.
+func (e *expCount) Next() uint32 {
+	for {
+		(*e)++
+		i := *e
+		if i%3 != 0 && i%5 != 0 && i%17 != 0 && i%257 != 0 {
+			return (1 << i) % 61429
+		}
+	}
+}
+
+// Reset the exponent counter to 0.
+func (e *expCount) Reset() {
+	*e = 0
 }

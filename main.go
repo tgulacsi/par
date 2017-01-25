@@ -89,7 +89,7 @@ func main() {
 	createFlags := flag.NewFlagSet("create", flag.ExitOnError)
 	createFlags.IntVar(&redundancy, "r", 30, "data shards")
 	createFlags.IntVar(&shardSize, "s", DefaultShardSize, "shard size")
-	createFlags.StringVar(&verS, "version", "tar", "version to create (tar|json|par2)")
+	createFlags.StringVar(&verS, "type", "tar", "version to create (tar|json|par3)")
 
 	restoreFlags := flag.NewFlagSet("restore", flag.ExitOnError)
 	flagOut := restoreFlags.String("o", "-", "output")

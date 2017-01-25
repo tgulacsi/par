@@ -51,3 +51,25 @@ func TestRecoveryPkt(t *testing.T) {
 		t.Errorf("got %v, wanted %v", g, w)
 	}
 }
+
+func TestExpCount(t *testing.T) {
+	var e expCount
+	for i, want := range []uint32{
+		2,
+		4,
+		16,
+		128,
+		256,
+		2048,
+		8192,
+		16384,
+		4107,
+		32856,
+		17132,
+	} {
+
+		if got := e.Next(); got != want {
+			t.Errorf("%d. got %d, want %d.", i, got, want)
+		}
+	}
+}

@@ -16,7 +16,7 @@ func TestRecoveryPkt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Log(want)
+	t.Log("want", want)
 
 	out, err := ioutil.TempFile("", "par2-")
 	if err != nil {
@@ -36,6 +36,7 @@ func TestRecoveryPkt(t *testing.T) {
 	if err := got.Parse(); err != nil {
 		t.Fatal(err)
 	}
+	t.Log("got", got)
 	if g, w := len(got.Files), len(want.Files); g != w {
 		t.Errorf("got %d files, wanted %d.", g, w)
 	}

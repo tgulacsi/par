@@ -56,14 +56,13 @@ func newTarNextShard(meta FileMetadata, parity *tar.Reader, data io.Reader) func
 		}
 
 		r, source := io.Reader(parity), "parity"
-		log.Printf("onlyPar=%t idx=%d D=%d", meta.OnlyParity, idx, D)
 		if meta.OnlyParity && idx < D {
 			r, source = data, "data"
 		}
+		_ = source
 		length := int(sm.Size)
 		hsh.Reset()
 		n, err := io.ReadFull(io.TeeReader(r, hsh), p[:length])
-		log.Printf("Read %d bytes from %s: %v", n, source, err)
 		if err != nil {
 			if sek, ok := r.(io.Seeker); ok {
 				if _, seekErr := sek.Seek(int64(len(p)-n), io.SeekCurrent); seekErr != nil {

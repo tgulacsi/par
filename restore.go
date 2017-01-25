@@ -28,10 +28,17 @@ import (
 
 	"github.com/klauspost/reedsolomon"
 	"github.com/pkg/errors"
-	"github.com/tgulacsi/par/par2"
 )
 
 var errShardBroken = errors.New("shard is broken")
+
+type namer interface {
+	Name() string
+}
+type namedReader struct {
+	io.Reader
+	namer
+}
 
 func RestoreParFile(w io.Writer, parFn, fileName string) error {
 	pfh, err := os.Open(parFn)
@@ -56,21 +63,11 @@ func RestoreParFile(w io.Writer, parFn, fileName string) error {
 		return errors.Errorf("unknown parity file start %q", b)
 	}
 
-	if ver == VersionPAR2 {
-		info := par2.ParInfo{ParFiles: []string{parFn}}
-		err := info.Parse()
-		log.Printf("info=%q err=%+v", info, err)
-		if err == nil && info.Main == nil {
-			err = errors.New("empty par file: " + parFn)
-		}
-		return err
-	}
-
 	r, err := os.Open(fileName)
 	if err != nil {
 		return errors.Wrap(err, fileName)
 	}
-	wr, err := ver.NewParWriterTo(br, r)
+	wr, err := ver.NewParWriterTo(namedReader{Reader: br, namer: pfh}, r)
 	if err != nil {
 		return err
 	}
@@ -106,6 +103,7 @@ func (ver version) NewParWriterTo(parity, data io.Reader) (io.WriterTo, error) {
 		}
 		meta.Version = VersionJSON
 		return meta.NewWriterTo(rewind(dec.Buffered(), parity), data), nil
+
 	case VersionPAR2:
 		meta.Version = VersionPAR2
 		return meta.NewWriterTo(parity, data), nil
@@ -155,7 +153,7 @@ func (meta *FileMetadata) NewWriterTo(parity, data io.Reader) io.WriterTo {
 		nextShard = newTarNextShard(*meta, parity.(*tar.Reader), data)
 
 	case VersionPAR2:
-		panic("PAR2 decoding is not implemented")
+		nextShard = newPAR2NextShard(*meta, parity.(namedReader), data)
 
 	default:
 		panic(fmt.Sprintf("Unknown version %v", meta.Version))

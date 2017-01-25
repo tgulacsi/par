@@ -38,11 +38,18 @@ func TestCR(t *testing.T) {
 	defer inp.Close()
 
 	parity, err := ioutil.TempFile("", "par-")
-	defer remove(parity.Name())
+	if os.Getenv("DEBUG") == "1" {
+		t.Logf("Parity file: %q", parity.Name())
+	} else {
+		defer remove(parity.Name())
+	}
 	defer parity.Close()
 
 	for _, ver := range []version{VersionJSON, VersionTAR, VersionPAR2} {
 		if _, err := inp.Seek(0, io.SeekStart); err != nil {
+			t.Fatal(err)
+		}
+		if err := parity.Truncate(0); err != nil {
 			t.Fatal(err)
 		}
 		testCR(t, ver, parity.Name(), inp)
